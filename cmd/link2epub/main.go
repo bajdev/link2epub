@@ -112,12 +112,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 	}
 
 	book, err := convert(ctx, pageURL)
-	if err != nil {
+	switch {
+	case errors.Is(err, pipeline.ErrFetch):
+		return fail(exitFetch, "%v", err)
+	case errors.Is(err, pipeline.ErrNoContent):
+		return fail(exitNoContent, "%v", err)
+	case err != nil:
 		return fail(exitBuild, "%v", err)
 	}
 
 	if *kepub {
-		return fail(exitBuild, "KEPUB conversion is %v (milestone M5)", pipeline.ErrNotImplemented)
+		return fail(exitBuild, "KEPUB conversion is not implemented yet (milestone M5)")
 	}
 
 	path := target.Path(book.Title)
