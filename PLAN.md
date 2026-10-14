@@ -8,6 +8,7 @@ link2epub is a command-line program written in Go. You give it a web page URL an
 link2epub -URL https://example.com/some-article -SAVE ~/Books/some-article.epub
 link2epub -URL https://example.com/some-article -SAVE ~/Books/      # a folder (created if missing): filename comes from the article title
 link2epub -URL https://example.com/some-article -SAVE ~/Books/a.epub -FORCE   # replace an existing file
+link2epub -URL https://example.com/some-article -SAVE /media/$USER/KOBOeReader/Articles/ -KEPUB   # Kobo-optimised
 ```
 
 ### Target devices
@@ -20,15 +21,16 @@ The primary targets are two grayscale e-ink readers. Every output decision (imag
 | Colour | Grayscale only | Grayscale only (16 levels, E Ink Carta) |
 | Aspect ratio | 3:4 | ≈3:4 |
 | EPUB rendering | Reflows EPUB with its own renderer; limited CSS support | Plain `.epub` uses the older Adobe RMSDK engine; `.kepub.epub` uses Kobo's faster WebKit engine |
-| Getting the book onto it | reMarkable desktop or mobile app, the USB web interface (`http://10.11.99.1`), or cloud sync | USB mass storage (FAT32): copy the file onto the device |
+| Getting the book onto it | You upload the saved file yourself (desktop or mobile app, or the USB web interface at `http://10.11.99.1`). Direct upload is a post-v1 milestone (M7) | USB mass storage (FAT32): `-SAVE` straight onto the device, or copy the file |
 
-Both screens share a 3:4 aspect ratio, so one image size and one cover size fit both. The plain EPUB output must work on both devices. Kobo-specific output (KEPUB) is opt-in; see §5.7.
+Both screens share a 3:4 aspect ratio, so one image size and one cover size fit both. The default plain EPUB must work on both devices. `-KEPUB` produces a Kobo-optimised `.kepub.epub` instead (§5.7). Use it for the Clara HD, and plain EPUB for the reMarkable.
 
 ### Scope for v1
 - One URL in, one EPUB out.
 - Extracts the main content plus metadata: title, author, date, site name, language.
 - Images are downloaded and embedded, so the book works offline. They are converted to grayscale and sized for the target screens.
 - Never overwrites an existing file unless `-FORCE` is given. Missing output folders are created.
+- `-KEPUB` writes a Kobo KEPUB (`.kepub.epub`) instead of a plain EPUB.
 - The output passes `epubcheck` (the standard EPUB validator) with zero errors.
 - Ships as a single static binary with no runtime dependencies.
 
@@ -36,16 +38,17 @@ Both screens share a 3:4 aspect ratio, so one image size and one cover size fit 
 - Several URLs in one book, crawling a site, following "next page" links.
 - Pages that only show content after JavaScript runs.
 - Pages behind a login or paywall.
+- Uploading directly to a reMarkable. You copy the saved file over yourself; direct upload is milestone M7.
 - A web UI or hosted service.
 
 ---
 
 ## 2. Command-line interface
 
-The program uses Go's standard-library `flag` package. Flag names are case-sensitive: exactly `-URL`, `-SAVE` and `-FORCE`. (`flag` also accepts `--URL` and the other double-dash forms.)
+The program uses Go's standard-library `flag` package. Flag names are case-sensitive: exactly `-URL`, `-SAVE`, `-FORCE` and `-KEPUB`. (`flag` also accepts `--URL` and the other double-dash forms.)
 
 ```
-Usage: link2epub -URL <url> -SAVE <path> [-FORCE]
+Usage: link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
 
   -URL string
         Web page to convert (required). Must be http:// or https://.
@@ -55,9 +58,14 @@ Usage: link2epub -URL <url> -SAVE <path> [-FORCE]
           - An existing folder     → same as above
           - Ends in .epub          → written to exactly that file
           - Anything else          → treated as a file path; ".epub" is appended
+        With -KEPUB, the extension is ".kepub.epub" instead (see below).
   -FORCE
         Overwrite the output file if it already exists. Without it, an
         existing file is never touched and the program exits with code 5.
+  -KEPUB
+        Write a Kobo KEPUB (.kepub.epub) instead of a plain EPUB. Kobo
+        devices open it with their faster WebKit renderer. Use it for the
+        Kobo Clara HD; leave it off for the reMarkable.
 ```
 
 How the flags behave:
@@ -70,6 +78,13 @@ How the flags behave:
   - A path that doesn't exist yet is a file unless it ends in `/`. So `-SAVE ~/Books/new/` creates the folder `new`, while `-SAVE ~/Books/new` writes `~/Books/new.epub`.
   - **Folders are created automatically** (`os.MkdirAll`, mode `0755`), including any missing parent folders. They are created only at save time, so a run that fails earlier (for example, the download fails) doesn't leave empty folders behind.
   - If part of the path exists as a regular file (for example, `~/Books` is a file), the program fails with exit code `4` and a clear message.
+- **Filenames with `-KEPUB`**: Kobo picks its renderer from the file extension. A KEPUB only gets the faster renderer if the file ends in `.kepub.epub`, so the extension is set automatically:
+  - Folder targets get `<slug>.kepub.epub`.
+  - `-SAVE x.kepub.epub` is used as is.
+  - `-SAVE x.epub` becomes `x.kepub.epub`, with a note on stderr. Otherwise the Kobo would open the file with the old renderer and the conversion would be wasted.
+  - Any other path gets `.kepub.epub` appended.
+  - A `-SAVE` path ending in `.kepub.epub` **without** `-KEPUB` is an error (exit code `2`, "add -KEPUB or use a .epub filename"). A plain EPUB with that name would be opened by the Kobo's KEPUB renderer and display badly.
+  - The overwrite check below always uses the final name, after the extension is adjusted.
 - **Overwrite protection (`-FORCE`)**:
   - **Without `-FORCE`**:
     - An existing file at the output path is never modified. The program prints `error: <path> already exists (use -FORCE to overwrite)` and exits with code `5`.
@@ -112,7 +127,7 @@ The project targets Go 1.24 or newer. The module path is `github.com/bajdev/link
 | AVIF images (optional) | `github.com/gen2brain/avif` | Pure Go (WASM-based), so the binary still needs no cgo |
 | EPUB packaging | `github.com/go-shiori/go-epub` | Maintained fork of `bmaupin/go-epub`. Writes EPUB 3 with a nav document, an NCX, cover, CSS and images |
 | Cover text | `golang.org/x/image/font/opentype` + an embedded open-licensed font (e.g. Literata, SIL OFL) | Draws the title on generated covers |
-| KEPUB output (optional, §5.7) | `github.com/pgaskin/kepubify/v4/kepub` | The standard Go library for converting EPUB to Kobo's KEPUB format |
+| KEPUB output (`-KEPUB`, §5.7) | `github.com/pgaskin/kepubify/v4/kepub` | The standard Go library for converting EPUB to Kobo's KEPUB format |
 | Book identifier | `github.com/google/uuid` | `uuid.NewSHA1` gives a stable ID for each URL |
 | Testing | `testing` + `net/http/httptest` (stdlib), `epubcheck` in CI | A real local HTTP server instead of mocks |
 | Lint | `go vet`, `staticcheck` or `golangci-lint` | |
@@ -135,6 +150,9 @@ The program is a straight pipeline of small packages under `internal/`. Each pac
 │net/http │   │trafilatura│  │bluemonday│  │download,│   │ go-epub │   │temp file│
 │+charset │   │+metadata │   │→ XHTML  │   │convert  │   │         │   │+ rename │
 └─────────┘   └──────────┘   └─────────┘   └─────────┘   └─────────┘   └─────────┘
+                                                                  │  -KEPUB  ▲
+                                                                  └─▶ kepub ─┘
+                                                                     (kepubify)
 ```
 
 ### Project layout
@@ -159,7 +177,7 @@ link2epub/
 │   │   ├── cover.go         # generated cover when the article has no lead image
 │   │   ├── chapter.tmpl     # title / byline / source header
 │   │   └── style.css        # embedded with //go:embed
-│   ├── kepub/kepub.go       # optional KEPUB conversion for Kobo (§5.7)
+│   ├── kepub/kepub.go       # -KEPUB conversion via kepubify (§5.7)
 │   └── save/save.go         # path resolution, folder creation, -FORCE handling, atomic write
 └── testdata/
     ├── pages/               # saved HTML: blog, news, Substack, docs, lazy images, Shift-JIS, RTL
@@ -221,9 +239,11 @@ func main() {
     urlFlag  := flag.String("URL", "", "web page to convert (required)")
     saveFlag := flag.String("SAVE", "", "file or folder to write the EPUB to (required)")
     force    := flag.Bool("FORCE", false, "overwrite the output file if it already exists")
+    kepubOut := flag.Bool("KEPUB", false, "write a Kobo KEPUB (.kepub.epub) instead of a plain EPUB")
     flag.Parse()
-    // validate → resolve -SAVE → early exists-check (unless -FORCE)
-    // → ctx with signal.NotifyContext(SIGINT) → pipeline.Run → save.Write(path, book, force) → print path
+    // validate → resolve -SAVE (extension depends on -KEPUB) → early exists-check (unless -FORCE)
+    // → ctx with signal.NotifyContext(SIGINT) → pipeline.Run → build EPUB
+    // → if -KEPUB: kepub.Convert → save.Write(path, bytes, force) → print path
 }
 ```
 
@@ -331,14 +351,26 @@ Uses `go-epub`:
   5. On any error, remove the temp file and the reservation, but never a file that existed before the run.
 - Rename-into-place works on FAT32 too, so saving straight onto a Kobo is safe.
 
-### 5.7 KEPUB for Kobo (optional, `-KEPUB`)
+### 5.7 KEPUB for Kobo (`-KEPUB`)
 The Clara HD renders plain `.epub` files with Adobe's older RMSDK engine. Files ending in `.kepub.epub` use Kobo's own WebKit-based engine instead, which gives:
 - faster page turns and better CSS support;
-- reading statistics, such as time left in the chapter.
+- reading statistics (time left in the chapter or book), and more reliable highlights and bookmarks.
 
-An optional `-KEPUB` flag would run the finished EPUB through `kepubify`'s Go package before saving, and use the `.kepub.epub` extension. kepubify wraps sentences in spans and adds Kobo's style hooks.
+How the conversion works:
+1. `build` always produces a normal EPUB first, into an in-memory buffer. This is the same book the reMarkable gets.
+2. `internal/kepub` opens that buffer with `zip.NewReader`. It then calls kepubify's `kepub.NewConverterWithOptions(...).Convert(ctx, w, zipReader)`, writing straight into the temp file that `save` provides.
+   - kepubify wraps every sentence in `<span class="koboSpan">`. Kobo needs these spans for reading statistics and highlights.
+   - It adds the `kobostylehacks` wrapper and makes sure the `cover-image` property is set.
+3. `save` renames the result into place, applying the same `-FORCE` rules as any other output.
 
-KEPUB is **not** the default. The reMarkable expects a plain EPUB, and one plain file that works on both devices is the safer default. See §10.
+Converter options:
+- `ConverterOptionHyphenate(true)`: turns on hyphenation, which helps justified text on the 6" screen.
+- `ConverterOptionSmartypants()`: left **off**. It rewrites quotes and dashes, which would change the article's text.
+- `ConverterOptionAddCSS`: not used. The e-ink stylesheet from §5.5 already suits Kobo.
+
+Validation:
+- `epubcheck` runs on the plain EPUB before conversion.
+- KEPUBs aren't standard EPUB (Kobo's own extensions trip epubcheck warnings), so they get structural tests and checks on a real device instead.
 
 ---
 
@@ -374,6 +406,7 @@ KEPUB is **not** the default. The reMarkable expects a plain EPUB, and one plain
   - `extract`: golden tests over `testdata/pages/*.html`, compared with `testdata/golden/*.json`. A `-update` flag regenerates the golden files.
   - `clean`: lazy-image and `srcset` selection, sanitizing, heading changes, and an XHTML well-formedness check on every fixture.
   - `assets`: every output image is grayscale and fits 1404×1872. A photo becomes JPEG, line art becomes a 16-level PNG. Transparency is flattened to white. WebP and SVG input never appear in the output. The first frame is taken from animated GIFs. Images are never upscaled. Also covers deduplication and failed downloads.
+  - `kepub`: convert a fixture EPUB, then check that the result is a valid zip with `mimetype` first, the content contains `koboSpan` spans, the OPF still marks the cover with `cover-image`, and the text is unchanged once the spans are removed.
   - `save`, all in `t.TempDir()`:
     - `-SAVE` resolution: `.epub` file, existing folder, trailing `/`, missing extension, `~`.
     - Folder creation: nested missing folders, and part of the path being an existing file (exit code 4).
@@ -384,13 +417,14 @@ KEPUB is **not** the default. The reMarkable expects a plain EPUB, and one plain
   - the exit code;
   - the zip layout: `mimetype` is the first entry and stored uncompressed, `META-INF/container.xml` exists, every manifest item is present;
   - `epubcheck` reports zero errors.
-- **CLI flag tests**: missing flags, bad URL, extra arguments, `-FORCE`, and the exit code for each. An existing output file must fail before any HTTP request is made: the test server counts its requests.
+- **CLI flag tests**: missing flags, bad URL, extra arguments, `-FORCE`, `-KEPUB`, and the exit code for each. `-KEPUB` cases: a folder target gets `.kepub.epub`, `x.epub` is rewritten to `x.kepub.epub` with a note, a `.kepub.epub` path without `-KEPUB` exits with code 2, and the overwrite check uses the adjusted name. An existing output file must fail before any HTTP request is made: the test server counts its requests.
 - **Device checks (manual, at each milestone from M3 onward)**: sideload a set of reference books onto a real reMarkable 2 and Kobo Clara HD. The set covers a long text article, an image-heavy post, code and tables, and a non-Latin script. Check:
   - the cover and its thumbnail in the library;
   - the table of contents;
   - image sharpness;
   - page-turn speed;
-  - that the user's font and size settings still apply.
+  - that the user's font and size settings still apply;
+  - on the Clara HD, the `-KEPUB` version too: it should open in the KEPUB renderer and show time-left statistics.
 
   Record the results in `docs/device-testing.md`.
 - **CI (GitHub Actions)**:
@@ -409,10 +443,11 @@ KEPUB is **not** the default. The reMarkable expects a plain EPUB, and one plain
 | M2 | Clean XHTML and e-ink CSS | Sanitizer, URL resolution, heading changes, chapter template, e-ink stylesheet. epubcheck passes in CI. First check on real devices |
 | M3 | Images for e-ink | Lazy-image fixes, concurrent download, grayscale, resizing to 1404×1872, JPEG or 16-level PNG choice, SVG rasterizing, deduplication |
 | M4 | Metadata and cover | Metadata fallbacks, 1404×1872 grayscale cover (lead image or typographic), heading-based table of contents |
-| M5 | Polish and release | Error messages and exit codes, README with device instructions, goreleaser binaries |
-| M6 | *(optional)* KEPUB | `-KEPUB` flag via kepubify, tested on the Clara HD |
+| M5 | KEPUB | `-KEPUB` flag via kepubify, extension handling, tested on the Clara HD |
+| M6 | Polish and v1 release | Error messages and exit codes, README with per-device instructions (reMarkable: plain EPUB plus manual upload; Kobo: `-KEPUB`), goreleaser binaries |
+| M7 | *(post-v1)* Direct reMarkable upload | Upload to a USB-connected reMarkable through its web interface, then optionally to reMarkable cloud (§9) |
 
-Each milestone is a separate PR. After M1 the core job already works from end to end.
+Each milestone is a separate PR. After M1 the core job already works from end to end. M0–M6 make up v1.
 
 ---
 
@@ -426,7 +461,9 @@ Each milestone is a separate PR. After M1 the core job already works from end to
   - `-NOIMAGES`;
   - `-TIMEOUT`.
 - **Follow pagination**: follow `rel="next"` links for multi-page articles.
-- **Send to reMarkable**: upload straight to a USB-connected reMarkable through its web interface (`POST http://10.11.99.1/upload`), or to reMarkable cloud using an `rmapi`-style client.
+- **Send to reMarkable (M7)**: in v1 you upload the saved file yourself. M7 adds a flag (e.g. `-REMARKABLE`) that, after saving locally, also uploads the book:
+  - first to a USB-connected device through its web interface (`POST http://10.11.99.1/upload`, multipart). This needs no account, but the "USB web interface" setting must be turned on;
+  - later, possibly to reMarkable cloud using an `rmapi`-style client. That needs a one-time device-pairing token and is more fragile, because the cloud API isn't officially documented.
 - **More device profiles**: a `-DEVICE` flag for colour e-ink (e.g. Kobo Libra Colour) or tablets, so colour images are kept. The `device.Profile` type already allows for this.
 - **Better contrast for e-ink**: optionally raise image contrast and gamma, since images often look washed out on e-ink.
 - **RSS/Atom digest**: turn the last N feed items into one EPUB.
@@ -434,7 +471,14 @@ Each milestone is a separate PR. After M1 the core job already works from end to
 
 ---
 
-## 10. Open questions
+## 10. Decisions made
 
-1. **KEPUB for the Kobo**: should `-KEPUB` be added (M6), so books on the Clara HD use Kobo's faster renderer? The default would stay plain EPUB, so one file works on both devices.
-2. **Getting books onto the reMarkable**: is saving a local file and uploading it yourself (desktop app or USB web interface) enough, or should link2epub upload to the reMarkable directly (§9)?
+| Question | Decision |
+|---|---|
+| Language | Go |
+| Interface | CLI with `-URL` and `-SAVE` |
+| Existing output file | Never overwritten unless `-FORCE` is given (exit code 5) |
+| Missing output folders | Created automatically |
+| Target devices | reMarkable 2 and Kobo Clara HD (grayscale e-ink) |
+| Kobo-optimised output | `-KEPUB` flag in v1 (M5) |
+| Getting books onto the reMarkable | v1 saves locally and you upload by hand. Direct upload is post-v1 milestone M7 |
