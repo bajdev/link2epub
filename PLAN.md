@@ -2,255 +2,299 @@
 
 ## 1. Goal
 
-Give link2epub one or more URLs. It fetches each page, pulls out the readable article content (dropping navigation, ads and comments), and writes a valid EPUB 3 file. The file should open cleanly in Apple Books, Kobo, Calibre, KOReader and Send-to-Kindle.
+link2epub is a command-line program written in Go. You give it a web page URL and a path on your computer. It downloads the page, extracts the readable article content (dropping navigation, ads, comments and similar clutter), and writes a valid EPUB 3 file to that path.
 
 ```bash
-link2epub https://example.com/some-article -o article.epub
-link2epub URL1 URL2 URL3 --title "Weekend Reading" -o reading.epub
+link2epub -URL https://example.com/some-article -SAVE ~/Books/some-article.epub
+link2epub -URL https://example.com/some-article -SAVE ~/Books/      # a directory: filename comes from the article title
 ```
 
 ### Scope for v1
-- Single URL produces a single-chapter book; multiple URLs produce one chapter each.
-- Main-content extraction with metadata: title, author, date, site name, language.
+- One URL in, one EPUB out.
+- Extracts the main content plus metadata: title, author, date, site name, language.
 - Images are downloaded and embedded, so the book works offline.
-- Output passes `epubcheck` with no errors.
+- The output passes `epubcheck` (the standard EPUB validator) with zero errors.
+- Ships as a single static binary with no runtime dependencies.
 
 ### Out of scope for v1 (see §9)
-- Web UI or hosted service, browser extension.
-- Crawling a whole site, or automatically following "next page" links.
+- Several URLs in one book, crawling a site, following "next page" links.
+- Pages that only show content after JavaScript runs.
 - Pages behind a login or paywall.
+- A web UI or hosted service.
 
 ---
 
-## 2. Technology choices
+## 2. Command-line interface
 
-**Language: Python 3.11+.** Python has the most mature libraries for every stage of this pipeline: extraction, HTML cleanup and EPUB packaging.
-
-| Concern | Library | Why |
-|---|---|---|
-| HTTP | `httpx` | Timeouts, redirects, HTTP/2, async for parallel image downloads |
-| JS-rendered pages (optional) | `playwright` | Only used with `--render`; kept as an optional extra |
-| Content extraction | `trafilatura` (primary), `readability-lxml` (fallback) | trafilatura scores best on extraction benchmarks and also returns metadata |
-| HTML parsing / XHTML | `lxml` | Fast; serializes well-formed XHTML, which EPUB requires |
-| Sanitizing | `nh3` | Allow-list sanitizer (Rust `ammonia` bindings) |
-| Images | `Pillow` | Converts unsupported formats, resizes, generates a cover |
-| EPUB packaging | `ebooklib` | Writes the OPF, nav doc, NCX and manifest |
-| CLI | `typer` | Typed CLI with little code |
-| Config / models | `pydantic` | Typed `Article` / `Book` models |
-| Testing | `pytest`, `respx` (mocks httpx), `epubcheck` (Java, run in CI) | |
-| Packaging | `uv` + `pyproject.toml` | Install with `uvx link2epub` / `pipx install link2epub` |
-
----
-
-## 3. Architecture
-
-A linear pipeline of small, separately testable stages:
+The program uses Go's standard-library `flag` package. Flag names are case-sensitive, exactly `-URL` and `-SAVE`. (`flag` also accepts `--URL` and `--SAVE`.)
 
 ```
- URL(s)
+Usage: link2epub -URL <url> -SAVE <path>
+
+  -URL string
+        Web page to convert (required). Must be http:// or https://.
+  -SAVE string
+        Where to write the EPUB (required).
+          - Ends in .epub        → written to exactly that file
+          - Existing directory   → <dir>/<slug-of-article-title>.epub
+          - Anything else        → treated as a file path; ".epub" is appended if missing
+```
+
+How the flags behave:
+- **Validation**:
+  - Missing `-URL` or `-SAVE` prints the usage text and exits with code `2`.
+  - A URL that doesn't parse, or isn't http/https, is rejected before anything is fetched.
+  - Any positional arguments left over are an error, which catches typos like `-url`.
+- **The `-SAVE` path**:
+  - A leading `~` is expanded, in case the shell didn't do it (for example, when the path is quoted).
+  - The parent directory must already exist. The program doesn't create directory trees on its own.
+  - The file is written to a temporary file in the same directory, then renamed into place. A failed run never leaves a half-written `.epub` behind.
+  - If the target file already exists, it is overwritten. Adding a `-force` flag later is an option; see §10.
+- **Exit codes**:
+
+  | Code | Meaning |
+  |---|---|
+  | `0` | Success. The absolute path of the written file is printed to stdout. |
+  | `1` | Fetch failed (network error, non-200 status, page isn't HTML). |
+  | `2` | Bad arguments. |
+  | `3` | No readable content could be extracted. |
+  | `4` | Building or writing the EPUB failed. |
+
+- **Output**: progress and warnings go to stderr (for example, `warning: image https://… failed: 404`), so stdout stays clean for scripting.
+
+---
+
+## 3. Technology choices
+
+The project targets Go 1.24 or newer. The module path is `github.com/bajdev/link2epub`.
+
+| Concern | Package | Why |
+|---|---|---|
+| CLI | `flag` (stdlib) | Matches the `-URL` / `-SAVE` style with no extra dependency |
+| HTTP | `net/http` (stdlib) | Timeouts, redirects and proxy support are built in |
+| Charset decoding | `golang.org/x/net/html/charset` | Picks the encoding from the HTTP header, then the `<meta>` tag, then detection |
+| HTML parsing / DOM work | `golang.org/x/net/html` + `github.com/PuerkitoBio/goquery` | Standard parser, plus jQuery-style selection for the cleanup passes |
+| Content extraction | `github.com/markusmobius/go-trafilatura` | Go port of trafilatura. Returns metadata (title, author, date, site name, language, image), and already falls back to readability and DOM-distiller internally |
+| Sanitizing | `github.com/microcosm-cc/bluemonday` | Mature allow-list HTML sanitizer |
+| Images | `image/jpeg`, `image/png`, `image/gif` (stdlib), `golang.org/x/image/webp`, `golang.org/x/image/draw` | Decoding, WebP support and high-quality resizing |
+| AVIF images (optional) | `github.com/gen2brain/avif` | Pure Go (WASM-based), so the binary still needs no cgo |
+| EPUB packaging | `github.com/go-shiori/go-epub` | Maintained fork of `bmaupin/go-epub`. Writes EPUB 3 with a nav document, an NCX, cover, CSS and images |
+| Book identifier | `github.com/google/uuid` | `uuid.NewSHA1` gives a stable ID for each URL |
+| Testing | `testing` + `net/http/httptest` (stdlib), `epubcheck` in CI | A real local HTTP server instead of mocks |
+| Lint | `go vet`, `staticcheck` or `golangci-lint` | |
+| Release | `goreleaser` | Static binaries for linux, macOS and windows on amd64 and arm64 |
+
+The build uses no cgo (`CGO_ENABLED=0`), so `go install github.com/bajdev/link2epub/cmd/link2epub@latest` works everywhere.
+
+---
+
+## 4. Architecture
+
+The program is a straight pipeline of small packages under `internal/`. Each package can be tested on its own:
+
+```
+ -URL
    │
    ▼
-┌──────────┐   ┌───────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
-│  Fetch   │──▶│  Extract  │──▶│  Clean   │──▶│  Assets  │──▶│  Build   │──▶│ Validate │──▶ .epub
-│ (httpx / │   │(trafilat. │   │(sanitize,│   │(download,│   │(ebooklib │   │(optional │
-│playwright)│  │+metadata) │   │ XHTML)   │   │ convert) │   │ OPF/nav) │   │ epubcheck)│
-└──────────┘   └───────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘
-```
-
-### Core data models (`models.py`)
-
-```python
-class FetchedPage(BaseModel):
-    url: str            # final URL after redirects
-    html: str
-    content_type: str
-    encoding: str
-
-class Image(BaseModel):
-    src_url: str
-    filename: str       # e.g. images/3fa2c1.jpg (content hash)
-    media_type: str
-    data: bytes
-
-class Article(BaseModel):
-    url: str
-    title: str
-    author: str | None
-    published: datetime | None
-    site_name: str | None
-    language: str       # BCP-47, default "en"
-    lead_image_url: str | None
-    content_xhtml: str  # sanitized XHTML fragment
-    images: list[Image]
-
-class Book(BaseModel):
-    identifier: str     # urn:uuid, uuid5 of the sorted URLs, so rebuilds are stable
-    title: str
-    authors: list[str]
-    language: str
-    chapters: list[Article]
-    cover: bytes | None
+┌─────────┐   ┌──────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐
+│  fetch  │──▶│ extract  │──▶│  clean  │──▶│ assets  │──▶│  build  │──▶│  save   │──▶ -SAVE path
+│net/http │   │trafilatura│  │bluemonday│  │download,│   │ go-epub │   │temp file│
+│+charset │   │+metadata │   │→ XHTML  │   │convert  │   │         │   │+ rename │
+└─────────┘   └──────────┘   └─────────┘   └─────────┘   └─────────┘   └─────────┘
 ```
 
 ### Project layout
 
 ```
 link2epub/
-├── pyproject.toml
+├── go.mod
+├── go.sum
 ├── README.md
-├── src/link2epub/
-│   ├── __init__.py
-│   ├── cli.py          # typer entry point
-│   ├── pipeline.py     # orchestrates the stages
-│   ├── models.py
-│   ├── fetch.py        # httpx + optional playwright
-│   ├── extract.py      # trafilatura → readability fallback, metadata
-│   ├── clean.py        # sanitize, URL resolution, lazy-load fixups, XHTML
-│   ├── assets.py       # image download/convert/dedupe
-│   ├── build.py        # ebooklib packaging, nav, cover
-│   ├── cover.py        # generated cover when no lead image exists
-│   └── templates/
-│       ├── chapter.xhtml   # header with title/byline/source link
-│       └── style.css       # minimal, reader-friendly CSS
-└── tests/
-    ├── fixtures/       # saved HTML pages (blog, news, docs, Medium-style, Substack)
-    ├── test_fetch.py
-    ├── test_extract.py
-    ├── test_clean.py
-    ├── test_assets.py
-    ├── test_build.py
-    └── test_e2e.py     # fixture → .epub → epubcheck
+├── PLAN.md
+├── cmd/link2epub/
+│   └── main.go              # flag parsing, -SAVE resolution, exit codes
+├── internal/
+│   ├── pipeline/pipeline.go # Run(ctx, url) → *Book; wires the stages together
+│   ├── fetch/fetch.go       # HTTP client, size limits, charset decoding
+│   ├── extract/extract.go   # go-trafilatura + metadata fallbacks
+│   ├── clean/clean.go       # URL resolution, lazy images, sanitizing, XHTML output
+│   ├── assets/assets.go     # concurrent image download, conversion, resizing
+│   ├── build/
+│   │   ├── build.go         # go-epub packaging
+│   │   ├── cover.go         # generated cover when the article has no lead image
+│   │   ├── chapter.tmpl     # title / byline / source header
+│   │   └── style.css        # embedded with //go:embed
+│   └── save/save.go         # path resolution, slugify, atomic write
+└── testdata/
+    ├── pages/               # saved HTML: blog, news, Substack, docs, lazy images, Shift-JIS, RTL
+    └── golden/              # expected extraction output (title, author, text)
+```
+
+### Core types (`internal/pipeline`)
+
+```go
+type Page struct {
+    URL         *url.URL // final URL after redirects
+    HTML        string   // decoded to UTF-8
+    ContentType string
+}
+
+type Image struct {
+    SourceURL string
+    Filename  string // "images/3fa2c1d9e0ab.jpg" (content hash)
+    MediaType string // image/jpeg, image/png, ...
+    Data      []byte
+}
+
+type Article struct {
+    URL          string
+    Title        string
+    Author       string
+    Published    time.Time
+    SiteName     string
+    Language     string // BCP-47, default "en"
+    LeadImageURL string
+    ContentXHTML string // sanitized, well-formed XHTML fragment
+    Images       []Image
+}
+```
+
+The `main` function stays thin:
+
+```go
+func main() {
+    urlFlag  := flag.String("URL", "", "web page to convert (required)")
+    saveFlag := flag.String("SAVE", "", "file or directory to write the EPUB to (required)")
+    flag.Parse()
+    // validate → ctx with signal.NotifyContext(SIGINT) → pipeline.Run → save.Write → print path
+}
 ```
 
 ---
 
-## 4. Stage details
+## 5. Stage details
 
-### 4.1 Fetch (`fetch.py`)
-- Use `httpx.Client` with: redirects followed (max 10), timeouts (connect 10 s, read 30 s), a realistic `User-Agent` that `--user-agent` can override, and `Accept-Language` set from `--lang`.
-- Reject responses that are not `text/html` or `application/xhtml+xml`, and give a clear error. (PDF input could be a later feature.)
-- Cap the body size (default 20 MB) by streaming and aborting past the limit.
-- Decode with the charset from the HTTP header, then `<meta charset>`, then charset detection (`charset-normalizer`, which httpx already depends on).
-- Retry 429 and 5xx responses twice with backoff.
-- `--render`: load the page in headless Chromium (Playwright), wait for `networkidle`, then return `page.content()`. This handles SPA and JS-only sites. Install it as an extra: `pip install link2epub[render]`.
-- Auto-fallback: if extraction from the static HTML yields fewer than ~200 characters and Playwright is installed, retry with `--render`.
+### 5.1 fetch
+- Uses one `http.Client` with:
+  - a 60 s overall timeout, plus dial and TLS-handshake timeouts;
+  - redirects followed up to 10 times;
+  - the proxy taken from the environment (`http.ProxyFromEnvironment`).
+- Sends request headers:
+  - a realistic `User-Agent`, because some sites return 403 to Go's default UA;
+  - `Accept: text/html,application/xhtml+xml`.
+- Rejects any status other than 2xx, and any content type other than `text/html` or `application/xhtml+xml`.
+- Caps the body at 20 MB (`io.LimitReader`), with a clear error if the page is larger.
+- Converts the body to UTF-8 with `charset.NewReader(body, contentType)`.
+- Retries twice, with backoff, on 429 and 5xx responses and on temporary network errors.
+- Every request uses the `context.Context`, so Ctrl-C cancels cleanly.
 
-### 4.2 Extract (`extract.py`)
-- `trafilatura.bare_extraction(html, url=..., include_images=True, include_tables=True, include_links=True, output_format="xml")` returns the main content plus metadata.
-- If trafilatura returns nothing or very short content, fall back to `readability.Document(html).summary()`.
-- Metadata comes from trafilatura first, then falls back to `og:title`, `og:site_name`, `article:author`, `article:published_time`, JSON-LD `Article`/`NewsArticle`, `<title>`, and `<html lang>`.
-- `lead_image_url` comes from `og:image` or `twitter:image`.
-- `--raw` / `--no-extract`: skip extraction and use the full `<body>`. This helps pages the extractor handles badly, such as documentation and pages that are mostly tables.
+### 5.2 extract
+- Calls `trafilatura.Extract(reader, trafilatura.Options{OriginalURL: u, IncludeImages: true, IncludeLinks: true, EnableFallback: true})`.
+  - The result's `ContentNode` (an `*html.Node`) is the article body.
+  - The result's `Metadata` holds the title, author, date, site name, language and image.
+- When trafilatura leaves a metadata field empty, it is filled from the page with goquery:
+  - `og:title`, `og:site_name`, `article:author`, `article:published_time`;
+  - JSON-LD `Article` / `NewsArticle` / `BlogPosting`;
+  - `<title>` and `<html lang>`.
+- `LeadImageURL` comes from `og:image`, then `twitter:image`.
+- If the extracted text is under about 200 characters, extraction fails with exit code `3`. The error message suggests the page may need JavaScript, which is not supported in v1.
 
-### 4.3 Clean (`clean.py`)
-EPUB content documents must be **well-formed XHTML**, and reading systems are strict about it. This stage does that work:
-1. **Resolve URLs**: make every `href` and `src` absolute against the page's final URL.
-2. **Fix lazy-loaded images**: promote `data-src`, `data-original` and `data-lazy-src` to `src`. Pick the best candidate from `srcset`/`<picture><source>`, aiming for about 1600 px wide. Drop 1×1 tracking pixels.
-3. **Sanitize** with `nh3`, using an allow-list:
-   - Tags: `p h1–h6 blockquote pre code em strong b i u s sub sup a img figure figcaption ul ol li dl dt dd table thead tbody tr th td hr br span div aside`.
-   - Attributes: `href`, `src`, `alt`, `title`, `colspan`, `rowspan`, `lang`.
-   - Remove `script style iframe form input object embed video audio` and all `on*` handlers.
-4. **Replace embeds**: turn YouTube and Twitter iframes into a linked paragraph, e.g. "▶ Video: <title> (link)", so the content isn't silently lost.
-5. **Normalize headings**: the chapter title becomes the `<h1>`; demote headings in the body so none are above `<h2>`.
-6. **Convert to XHTML**: parse with `lxml.html`, then serialize with `lxml.etree.tostring(method="xml")`. This guarantees closed tags, escaped entities and valid IDs, and avoids HTML-only named entities such as `&nbsp;`, which become numeric references.
-7. **Links**: keep external links absolute. Rewrite links that point to another URL in the same book into internal `chapter_N.xhtml#...` links.
+### 5.3 clean
+EPUB content files must be **well-formed XHTML**, and e-readers are strict about it. This stage works on the `*html.Node` tree:
+1. **Make URLs absolute**: resolve every `href` and `src` against the final page URL with `url.ResolveReference`.
+2. **Fix lazy-loaded images**:
+   - Move `data-src`, `data-original` or `data-lazy-src` into `src` when one is present.
+   - Pick the candidate from `srcset` or `<picture><source>` that is closest to 1600 px wide.
+   - Remove 1×1 tracking pixels, and images without a usable `src`.
+3. **Replace embeds**: turn YouTube, Vimeo and Twitter/X iframes into a paragraph link (`▶ Video: <link>`), so the reader knows something was there.
+4. **Sanitize** with a `bluemonday` policy built from an allow-list:
+   - Tags: `p h1–h6 blockquote pre code em strong b i u s sub sup a img figure figcaption ul ol li dl dt dd table thead tbody tfoot tr th td hr br span div aside abbr cite q small`.
+   - Attributes: `href` on `a`; `src`, `alt` and `title` on `img`; `colspan` and `rowspan` on cells; `lang` and `dir` globally.
+   - Everything else is removed: `script`, `style`, `iframe`, `form`, `video`, `on*` handlers, `class`, `id` and inline styles.
+5. **Normalize headings**: the article title becomes the chapter's only `<h1>`. Body headings shift down so none sits above `<h2>`.
+6. **Serialize to XHTML**: render with `html.Render`, which closes void elements (`<br/>`), quotes attributes and escapes `& < >`. Then check the result with `encoding/xml`'s decoder. If it isn't well-formed, fail loudly in tests rather than producing an EPUB that e-readers refuse to open. HTML named entities such as `&nbsp;` are never emitted, because the content is written as raw UTF-8.
 
-### 4.4 Assets (`assets.py`)
-- Collect every `<img src>` and the lead image.
-- Download them concurrently with `httpx.AsyncClient`, with a semaphore of 8 and `Referer` set to the article URL, since some CDNs need it.
-- Name files by content hash (`images/<sha1[:12]>.<ext>`) so duplicates collapse into one file.
+### 5.4 assets
+- Collects every `<img src>` in the cleaned content, plus the lead image.
+- Downloads them concurrently with an `errgroup` and a limit of 8 at a time. Each request sends `Referer: <article URL>`, because some CDNs require it, and each image is capped at 10 MB.
+- Names files by content hash (`images/<sha1[:12]>.<ext>`), so duplicate images are stored once. Each `src` is rewritten to its local filename.
 - **Formats**:
-  - Keep JPEG, PNG, GIF and SVG as they are. These are EPUB core media types.
-  - Convert WebP, AVIF, HEIC, BMP and TIFF to JPEG, or to PNG when the image has transparency. WebP is a core media type in EPUB 3.3, but many older e-readers can't display it.
-  - Sanitize SVGs: strip scripts and external references.
-- **Size**: downscale to at most 1600 px on the long edge and re-encode JPEG at quality 85. The `--max-image-size` and `--grayscale` flags help e-ink devices and Kindle email size limits.
-- If a download fails, keep the `<img>` alt text as a placeholder and log a warning rather than failing the whole book.
-- `--no-images` skips this stage and removes all `<img>` elements.
+  - JPEG, PNG and GIF stay as they are. These are EPUB core media types.
+  - WebP and AVIF are decoded and re-encoded: as JPEG at quality 85 for opaque images, or as PNG when the image has transparency. WebP is allowed in EPUB 3.3, but many older e-readers can't show it.
+  - SVG is kept only after a basic cleanup: `<script>`, `on*` attributes and external references are removed.
+  - Images in any other format are dropped, and their alt text is kept as a placeholder.
+- **Size**: images larger than 1600 px on the long edge are downscaled with `draw.CatmullRom`.
+- A failed image download is a warning on stderr, never a fatal error. The `<img>` becomes `<p class="missing-image">[Image: alt text]</p>`.
 
-### 4.5 Build (`build.py`)
-Using `ebooklib`:
-- **Metadata**: `dc:identifier` (urn:uuid), `dc:title`, `dc:creator`, `dc:language`, `dc:date`, `dc:source` (the URL), `dc:publisher` (site name), and `dcterms:modified`.
-- **One XHTML file per chapter**, rendered from `templates/chapter.xhtml`:
+### 5.5 build
+Uses `go-epub`:
+- `epub.NewEpub(title)`, then sets:
+  - author, language, description, and a UUID identifier (`uuid.NewSHA1` of the URL, so rebuilding the same URL gives the same ID);
+  - `dc:source` set to the URL, and the publisher set to the site name.
+- `AddCSS` with the embedded `style.css`:
+  - a serif body font, `img { max-width: 100% }`, `pre { white-space: pre-wrap }`, simple table borders;
+  - no fixed font sizes, so the reader's own font settings still apply.
+- Adds every image with `AddImage`, from a local temp file or data URL, so go-epub never downloads anything itself.
+- Adds one chapter with `AddSection(body, title, "chapter.xhtml", cssPath)`. The body is `chapter.tmpl` filled in:
+  ```html
+  <h1>{{.Title}}</h1>
+  <p class="byline">{{.Author}} · {{.SiteName}} · {{.Published}}</p>
+  <p class="source"><a href="{{.URL}}">{{.URL}}</a></p>
+  {{.ContentXHTML}}
   ```
-  <h1>Title</h1>
-  <p class="byline">Author · Site · Date</p>
-  <p class="source"><a href="URL">URL</a></p>
-  …content…
-  ```
-- A shared `style.css` with readable defaults: serif body, `max-width` images, `pre` wrapping, simple table borders. Don't hard-code font sizes, so the reader's own font settings still apply.
-- **Navigation**: write an EPUB 3 `nav.xhtml` and an NCX (for EPUB 2 readers and older Kindles). With one article, build the TOC from its `<h2>`/`<h3>` headings. With several, use one entry per article.
-- **Cover**:
-  - Single article: use the lead image when it exists, with the title overlaid by Pillow.
-  - Otherwise generate a plain typographic cover (title, site, date) at 1600×2560.
-  - `--cover PATH` overrides both.
-- **Spine**: cover, nav (optional, `--toc-page`), then chapters in input order.
-- The default filename is a slug of the title, e.g. `the-article-title.epub`.
+- Builds the **table of contents** from the article's `<h2>` and `<h3>` headings:
+  - inject `id` anchors into those headings;
+  - add `AddSubSection` entries pointing to them.
+  - go-epub writes both the EPUB 3 `nav.xhtml` and an NCX for older readers.
+- The **cover** uses the lead image when one exists. Otherwise a simple typographic cover is generated: 1600×2560, showing the title and site name, drawn with `image/draw` and `golang.org/x/image/font` using an embedded open-licensed font. It is set with `SetCover`.
 
-### 4.6 Validate
-- `--validate` runs `epubcheck` when it is on `PATH` and reports any errors.
-- CI always runs epubcheck on the end-to-end fixture outputs.
-
----
-
-## 5. CLI design (`cli.py`)
-
-```
-link2epub [OPTIONS] URL [URL...]
-
-  -o, --output PATH         Output file (default: <slug-of-title>.epub)
-  -t, --title TEXT          Book title (default: article title, or "Collection" for multiple)
-  -a, --author TEXT         Override author
-      --lang TEXT           Language code (default: detected)
-      --cover PATH          Custom cover image
-      --render              Render with headless Chromium (needs link2epub[render])
-      --raw                 Skip readability extraction; use full page body
-      --no-images           Don't download or embed images
-      --max-image-size INT  Longest edge in px (default 1600)
-      --grayscale           Convert images to grayscale (e-ink)
-      --user-agent TEXT
-      --cookies PATH        Netscape cookies.txt for pages behind simple logins
-      --from-file PATH      Read URLs from a file, one per line
-      --validate            Run epubcheck on the result
-  -v, --verbose
-```
-
-Exit codes: `0` success; `1` fetch error; `2` no extractable content; `3` build or validation error. When several URLs are given, a failure on one URL is reported, the rest of the book is still built, and the exit code is non-zero.
-
-`pipeline.py` exposes `build_epub(urls: list[str], options: Options) -> Path`, so a web front end or other caller can reuse the pipeline without going through the CLI.
+### 5.6 save
+- Resolves the final path using the `-SAVE` rules in §2.
+- Builds the filename slug from the title: lowercase ASCII, with runs of other characters collapsed to `-`, at most 80 characters. If the slug comes out empty, the filename falls back to `article.epub`.
+- Calls `e.WriteTo()` into an `os.CreateTemp(dir, ".link2epub-*")` file, then `fsync`, then `os.Rename` to the final path. The temp file is removed on any error.
 
 ---
 
 ## 6. Edge cases and risks
 
-| Issue | Mitigation |
+| Issue | Handling in v1 |
 |---|---|
-| JS-only pages (SPAs) | `--render` with Playwright, plus auto-fallback when content is empty |
-| Paywalls, cookie walls, consent banners | Sanitizing removes overlays; `--cookies` for sites the user is logged into; otherwise out of scope |
-| Bot protection (Cloudflare and similar) | Realistic UA, or `--render`; report a clear error and don't try to bypass protections |
-| Malformed HTML | lxml recovers; XHTML serialization guarantees well-formedness |
-| Non-UTF-8 pages | Decode via header, then meta tag, then detection; always write UTF-8 |
-| Huge pages and images | Size caps on the page and per image; downscaling |
-| Math (MathJax/KaTeX) | v1: keep the rendered MathML if present (EPUB 3 supports MathML), otherwise the TeX source as text |
-| Code blocks | Keep `<pre><code>`; CSS `white-space: pre-wrap` |
-| Right-to-left languages | Carry `lang`/`dir` into the XHTML and set `page-progression-direction` in the OPF |
-| Multi-page articles | v2: follow `rel="next"` or an explicit `--follow-next` |
-| Copyright | The tool is for personal offline reading; say so in the README. Keep `dc:source` attribution in every chapter |
+| Pages that need JavaScript (SPAs) | Detect near-empty extraction, exit with code `3` and a clear message. JavaScript rendering with `chromedp` is a future option (§9) |
+| Paywalls and cookie or consent walls | Overlays are stripped by sanitizing. Content the server never sends is out of scope |
+| Bot protection (Cloudflare and similar) | Use a realistic UA. Otherwise report the 403 clearly. Never try to get around it |
+| Malformed HTML | `x/net/html` follows the HTML5 parsing algorithm, so it always produces a tree |
+| Non-UTF-8 pages | Decoded with `x/net/html/charset`. Output is always UTF-8 |
+| Huge pages or images | 20 MB page cap, 10 MB per image, downscaling |
+| Math (MathJax/KaTeX) | Keep MathML if the page has it (EPUB 3 supports MathML). Otherwise keep the TeX source as text |
+| Code blocks | Keep `<pre><code>`, with CSS `pre-wrap` |
+| Right-to-left languages | Carry `lang` and `dir` through, and set the spine's `page-progression-direction` |
+| Copyright | For personal offline reading. Every book records the source URL in `dc:source` and in the chapter header |
 
-**Security**, which matters most if a web service is ever added:
-- SSRF: in service mode, resolve hostnames and refuse private, loopback and link-local IPs, re-checking after each redirect.
-- Never run page scripts except in sandboxed Playwright. Sanitize everything that goes into the EPUB, since some reading systems execute JS.
-- Enforce download size and time limits to prevent resource exhaustion.
+**Security**
+- Page scripts never run.
+- Everything that goes into the EPUB is sanitized, because some e-readers run JavaScript inside books.
+- Download sizes and times are capped.
+- `-SAVE` is used exactly as given. Nothing taken from the page (such as the title) can push the output outside the chosen directory, because the slug never contains path separators.
 
 ---
 
 ## 7. Testing strategy
 
-- **Unit tests per stage** using saved HTML fixtures. The fixtures cover a WordPress blog, a news site, a Medium/Substack post, a documentation page, a page with lazy images and `srcset`, a non-UTF-8 page, and an RTL page.
-- **Fetch tests** mock HTTP with `respx`: redirects, 404, 429 retry, wrong content type, oversized body, charset handling.
-- **Golden tests**: compare extracted text and metadata against expected JSON snapshots.
-- **End-to-end**: fixture → `.epub`, then assert the zip structure (`mimetype` is the first entry and stored uncompressed, `META-INF/container.xml` exists, all manifest items are present) and run **epubcheck with zero errors**.
-- **Optional live smoke tests** (marked `@pytest.mark.network`, not run in CI by default) against a few stable real URLs.
-- **CI**: GitHub Actions on Python 3.11–3.13 with Java available for epubcheck; `ruff` for lint and format, `mypy` for types.
+- **Unit tests per package**, written as table-driven tests in Go:
+  - `fetch`: `httptest.Server` covering redirects, 404, 429 retry, wrong content type, oversized body, Shift-JIS and ISO-8859-1 pages.
+  - `extract`: golden tests over `testdata/pages/*.html`, compared with `testdata/golden/*.json`. A `-update` flag regenerates the golden files.
+  - `clean`: lazy-image and `srcset` selection, sanitizing, heading changes, and an XHTML well-formedness check on every fixture.
+  - `assets`: WebP→JPEG, transparent→PNG, resizing, deduplication, failed downloads.
+  - `save`: `-SAVE` resolution (`.epub` file, existing directory, missing extension, missing parent directory, `~`), slug generation, the atomic write leaving nothing behind on error.
+- **End-to-end** (`cmd/link2epub`): an `httptest.Server` serves a fixture page and its images. The test runs the CLI with `-URL` and `-SAVE`, then checks:
+  - the exit code;
+  - the zip layout: `mimetype` is the first entry and stored uncompressed, `META-INF/container.xml` exists, every manifest item is present;
+  - `epubcheck` reports zero errors.
+- **CLI flag tests**: missing flags, bad URL, extra arguments, and the exit code for each.
+- **CI (GitHub Actions)**:
+  - `go vet`, `staticcheck` and `go test -race ./...`;
+  - epubcheck (Java) for the end-to-end test;
+  - a `goreleaser` dry run.
 
 ---
 
@@ -258,34 +302,37 @@ Exit codes: `0` success; `1` fetch error; `2` no extractable content; `3` build 
 
 | # | Milestone | Deliverable |
 |---|---|---|
-| M0 | Scaffold | `pyproject.toml`, `src/` layout, typer CLI stub, ruff/mypy/pytest, CI workflow |
-| M1 | Walking skeleton | Fetch + trafilatura + ebooklib produce a text-only EPUB for one URL |
-| M2 | Clean XHTML | Sanitizer, URL resolution, XHTML serialization, chapter template and CSS; passes epubcheck |
-| M3 | Images | Lazy-load fixes, async download, format conversion, resizing, dedupe |
-| M4 | Metadata and cover | Full metadata fallbacks, generated and lead-image covers, heading-based TOC |
-| M5 | Multiple URLs | One chapter per URL, cross-links between chapters, `--from-file`, partial-failure handling |
-| M6 | JS rendering | `--render` extra and auto-fallback |
-| M7 | Polish and release | README, error messages, `--validate`, publish to PyPI |
+| M0 | Scaffold | `go.mod`, layout, `main.go` with `-URL`/`-SAVE` parsing and validation, CI workflow |
+| M1 | Basic working version | fetch, trafilatura and go-epub produce a text-only EPUB saved to `-SAVE` |
+| M2 | Clean XHTML | Sanitizer, URL resolution, heading changes, chapter template and CSS. epubcheck passes in CI |
+| M3 | Images | Lazy-image fixes, concurrent download, WebP/AVIF conversion, resizing, deduplication |
+| M4 | Metadata and cover | Metadata fallbacks, lead-image or generated cover, heading-based table of contents |
+| M5 | Polish and release | Atomic save, error messages and exit codes, README, goreleaser binaries |
 
-Each milestone is a separate PR, and each ends with something usable. M1 alone already does the core job end to end.
+Each milestone is a separate PR. After M1 the core job already works from end to end.
 
 ---
 
 ## 9. Future extensions
 
-- **Web UI / API**: a FastAPI endpoint `POST /convert {urls: [...]}` that returns the `.epub`, plus a minimal HTML form. It reuses `pipeline.build_epub`. Needs the SSRF protection from §6.
-- **Send to Kindle / e-reader**: email the EPUB to a Send-to-Kindle address via SMTP, or upload it to Dropbox or Kobo.
-- **Browser extension / bookmarklet**: send the current tab's rendered DOM to the service. This handles logged-in pages without sharing cookies.
-- **RSS/Atom feeds**: turn the last N feed items into a digest EPUB, possibly scheduled daily.
-- **Pagination following**: `--follow-next` for multi-page articles and forum threads.
-- **Other outputs**: KEPUB for Kobo, PDF via the same pipeline.
-- **Caching**: an on-disk HTTP cache so rebuilding a collection doesn't download everything again.
+- **JavaScript rendering**: a `-RENDER` flag using `chromedp` to drive a local Chrome/Chromium for SPA pages.
+- **Several URLs in one book**: allow `-URL` to be repeated (a custom `flag.Value`), with one chapter per URL, or read URLs from a file.
+- **More flags**:
+  - `-TITLE` and `-AUTHOR` overrides;
+  - `-COVER` for a custom cover image;
+  - `-NOIMAGES`;
+  - `-GRAYSCALE` for e-ink;
+  - `-TIMEOUT`;
+  - `-FORCE` to refuse overwrites unless set.
+- **Follow pagination**: follow `rel="next"` links for multi-page articles.
+- **Send to Kindle**: email the result over SMTP.
+- **RSS/Atom digest**: turn the last N feed items into one EPUB.
+- **Web service**: an `http.Handler` around `pipeline.Run`. This would need SSRF protection: refuse private and loopback IP addresses, and re-check after each redirect.
 
 ---
 
 ## 10. Open questions
 
-1. **Language**: this plan assumes Python. A Node/TypeScript stack (`@mozilla/readability` + `jsdom` + `epub-gen-memory`) would be the alternative if you want it to live in a JS ecosystem.
-2. **Interface**: is a CLI the right first deliverable, or is a web UI needed sooner?
-3. **Target devices**: are Kindle or e-ink the main targets? If so, grayscale, smaller images and avoiding WebP should be the defaults.
-4. **JS-heavy sites**: how important are they? This decides whether Playwright stays an optional extra or becomes a core dependency.
+1. **Overwriting**: when the `-SAVE` file already exists, should link2epub overwrite it (the current plan) or refuse unless `-FORCE` is given?
+2. **Missing directories**: should a `-SAVE` path whose parent directory doesn't exist be created automatically (`os.MkdirAll`), or rejected (the current plan)?
+3. **Target devices**: if Kindle or e-ink readers are the main target, images could default to grayscale and smaller sizes.
