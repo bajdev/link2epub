@@ -40,6 +40,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Download epubcheck
+        shell: bash
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/epubcheck.zip" \
+            https://github.com/w3c/epubcheck/releases/download/v${EPUBCHECK_VERSION}/epubcheck-${EPUBCHECK_VERSION}.zip
+          unzip -q "$RUNNER_TEMP/epubcheck.zip" -d "$RUNNER_TEMP"
+          echo "EPUBCHECK_JAR=$RUNNER_TEMP/epubcheck-${EPUBCHECK_VERSION}/epubcheck.jar" >> "$GITHUB_ENV"
+        env:
+          EPUBCHECK_VERSION: "5.2.1"
       - name: Test
         run: go test -race ./...
       - name: Build

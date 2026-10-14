@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/bajdev/link2epub/internal/epubtest"
 	"github.com/bajdev/link2epub/internal/pipeline"
 )
 
@@ -219,17 +222,6 @@ func TestKEPUBNotImplemented(t *testing.T) {
 	assertEmptyDir(t, dir)
 }
 
-func TestPipelineNotImplemented(t *testing.T) {
-	// Until milestone M1, the real pipeline fails cleanly.
-	dir := t.TempDir()
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"-URL", testURL, "-SAVE", dir}, &stdout, &stderr, pipeline.Run)
-	if code != exitBuild || !strings.Contains(stderr.String(), "not implemented yet") {
-		t.Errorf("exit code = %d, stderr = %q", code, stderr.String())
-	}
-	assertEmptyDir(t, dir)
-}
-
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -257,4 +249,81 @@ func assertEmptyDir(t *testing.T, dir string) {
 	if len(entries) != 0 {
 		t.Errorf("%s is not empty: %v", dir, entries)
 	}
+}
+
+// TestEndToEnd runs the real pipeline against a local web server.
+func TestEndToEnd(t *testing.T) {
+	blog, err := os.ReadFile("../../testdata/pages/blog.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/posts/eink":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(blog)
+		case "/app":
+			w.Header().Set("Content-Type", "text/html")
+			w.Write([]byte(`<html><body><div id="root"></div><script src="/app.js"></script></body></html>`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	realRun := func(args ...string) result {
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), args, &stdout, &stderr, pipeline.Run)
+		return result{code, stdout.String(), stderr.String()}
+	}
+
+	t.Run("article", func(t *testing.T) {
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/posts/eink", "-SAVE", dir)
+		if r.code != exitOK {
+			t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		path := filepath.Join(dir, "why-e-ink-is-easier-on-the-eyes.epub")
+		if strings.TrimSpace(r.stdout) != path {
+			t.Errorf("stdout = %q, want %q", r.stdout, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		book.AssertWellFormed(t)
+		chapter := book.File(t, "chapter.xhtml")
+		for _, want := range []string{
+			"<h1>Why E-Ink Is Easier on the Eyes</h1>",
+			"Ada Lovelace · The Reading Desk · 14 March 2025",
+			"Electronic paper does not shine light into your eyes.",
+		} {
+			if !strings.Contains(chapter, want) {
+				t.Errorf("chapter is missing %q", want)
+			}
+		}
+		if strings.Contains(chapter, "Great article, thanks!") {
+			t.Errorf("chapter contains page comments")
+		}
+		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/missing", "-SAVE", dir)
+		if r.code != exitFetch || !strings.Contains(r.stderr, "returned 404 Not Found") {
+			t.Errorf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		assertEmptyDir(t, dir)
+	})
+
+	t.Run("no content", func(t *testing.T) {
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/app", "-SAVE", dir)
+		if r.code != exitNoContent || !strings.Contains(r.stderr, "no readable article content") {
+			t.Errorf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		assertEmptyDir(t, dir)
+	})
 }
