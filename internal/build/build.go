@@ -3,19 +3,24 @@ package build
 
 import (
 	_ "embed"
+	"encoding/base64"
 	"fmt"
 	"html/template"
+	"net/url"
 	"strings"
 
 	epub "github.com/go-shiori/go-epub"
 	"github.com/google/uuid"
-	"golang.org/x/net/html"
 
+	"github.com/bajdev/link2epub/internal/clean"
 	"github.com/bajdev/link2epub/internal/extract"
 )
 
 //go:embed chapter.tmpl
 var chapterTmpl string
+
+//go:embed style.css
+var styleCSS []byte
 
 var chapter = template.Must(template.New("chapter").Parse(chapterTmpl))
 
@@ -39,32 +44,41 @@ func Build(a *extract.Article) (*epub.Epub, error) {
 		e.SetDescription(a.Description)
 	}
 
+	css, err := e.AddCSS("data:text/css;base64,"+base64.StdEncoding.EncodeToString(styleCSS), "style.css")
+	if err != nil {
+		return nil, fmt.Errorf("adding stylesheet: %w", err)
+	}
 	body, err := chapterBody(a)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := e.AddSection(body, a.Title, "chapter.xhtml", ""); err != nil {
+	if _, err := e.AddSection(body, a.Title, "chapter.xhtml", css); err != nil {
 		return nil, err
 	}
 	return e, nil
 }
 
 // chapterBody renders the chapter: a header with the title, byline and
-// source link, followed by the article content as XHTML.
+// source link, followed by the cleaned article content.
 func chapterBody(a *extract.Article) (string, error) {
-	content, err := renderChildren(a.Content)
+	base, err := url.Parse(a.URL)
+	if err != nil {
+		return "", err
+	}
+	content, err := clean.Content(a.Content, base)
 	if err != nil {
 		return "", err
 	}
 	var b strings.Builder
 	err = chapter.Execute(&b, struct {
-		Title, Byline, URL string
-		Content            template.HTML
+		Lang, Title, Byline, URL string
+		Content                  template.HTML
 	}{
+		Lang:    a.Language,
 		Title:   a.Title,
 		Byline:  byline(a),
 		URL:     a.URL,
-		Content: template.HTML(content), // already serialized and escaped by html.Render
+		Content: template.HTML(content), // sanitized and checked by clean.Content
 	})
 	if err != nil {
 		return "", fmt.Errorf("rendering chapter: %w", err)
@@ -86,17 +100,4 @@ func byline(a *extract.Article) string {
 		parts = append(parts, a.Published.Format("2 January 2006"))
 	}
 	return strings.Join(parts, " · ")
-}
-
-// renderChildren serializes the children of n. html.Render closes void
-// elements (<br/>), quotes attributes and escapes text, which keeps the
-// result well-formed XHTML for the markup go-trafilatura produces.
-func renderChildren(n *html.Node) (string, error) {
-	var b strings.Builder
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		if err := html.Render(&b, c); err != nil {
-			return "", err
-		}
-	}
-	return b.String(), nil
 }

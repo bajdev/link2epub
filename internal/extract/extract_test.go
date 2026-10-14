@@ -21,7 +21,16 @@ func extractFile(t *testing.T, name, pageURL string) (*Article, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Extract(string(data), u)
+	return Extract(parse(t, string(data)), u)
+}
+
+func parse(t *testing.T, page string) *html.Node {
+	t.Helper()
+	doc, err := html.Parse(strings.NewReader(page))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return doc
 }
 
 func render(t *testing.T, n *html.Node) string {
@@ -99,8 +108,20 @@ func TestExtractNoContent(t *testing.T) {
 	}
 	u, _ := url.Parse("https://example.com/")
 	for name, page := range pages {
-		if _, err := Extract(page, u); !errors.Is(err, ErrNoContent) {
+		if _, err := Extract(parse(t, page), u); !errors.Is(err, ErrNoContent) {
 			t.Errorf("%s: error = %v, want ErrNoContent", name, err)
+		}
+	}
+}
+
+func TestLanguageTag(t *testing.T) {
+	tests := map[string]string{
+		"en": "en", "en-US": "en-US", "en_GB": "en-GB", " fr ": "fr", "pt-br": "pt-BR",
+		"": "en", "not a language": "en", "und": "en",
+	}
+	for in, want := range tests {
+		if got := languageTag(in); got != want {
+			t.Errorf("languageTag(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
