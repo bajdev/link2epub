@@ -241,4 +241,4 @@ link2epub builds on these open-source projects:
 
 ## License
 
-No license has been chosen yet.
+link2epub is released under the [MIT License](LICENSE).
