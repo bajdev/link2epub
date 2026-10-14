@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"html/template"
 	"strings"
-	"sync"
 
 	epub "github.com/go-shiori/go-epub"
 	"github.com/google/uuid"
@@ -20,16 +19,11 @@ var chapterTmpl string
 
 var chapter = template.Must(template.New("chapter").Parse(chapterTmpl))
 
-// useMemoryFS makes go-epub keep its working files in memory rather than in
-// a temporary folder. It is a package-wide go-epub setting.
-var useMemoryFS = sync.OnceValue(func() error { return epub.Use(epub.MemoryFS) })
-
 // Build returns the EPUB for a. The result's WriteTo writes the book.
 func Build(a *extract.Article) (*epub.Epub, error) {
-	if err := useMemoryFS(); err != nil {
-		return nil, err
-	}
-
+	// go-epub stages files in a temporary folder that it removes after each
+	// write. Don't switch it to epub.MemoryFS: on Windows that loses every
+	// file except mimetype, producing an empty book.
 	e, err := epub.NewEpub(a.Title)
 	if err != nil {
 		return nil, err
