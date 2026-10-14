@@ -438,8 +438,8 @@ Validation:
 
 | # | Milestone | Deliverable |
 |---|---|---|
-| M0 | Scaffold | `go.mod`, layout, `main.go` with `-URL`/`-SAVE`/`-FORCE` parsing and validation, CI workflow |
-| M1 | Basic working version | fetch, trafilatura and go-epub produce a text-only EPUB. `save` already handles folder creation, `-FORCE` and atomic writes |
+| M0 | Scaffold | `go.mod`, layout, `main.go` with `-URL`/`-SAVE`/`-FORCE`/`-KEPUB` parsing and validation, the `save` package (path rules, folder creation, `-FORCE`, atomic writes), CI workflow. `-KEPUB` conversion itself arrives in M5 |
+| M1 | Basic working version | fetch, trafilatura and go-epub produce a text-only EPUB |
 | M2 | Clean XHTML and e-ink CSS | Sanitizer, URL resolution, heading changes, chapter template, e-ink stylesheet. epubcheck passes in CI. First check on real devices |
 | M3 | Images for e-ink | Lazy-image fixes, concurrent download, grayscale, resizing to 1404×1872, JPEG or 16-level PNG choice, SVG rasterizing, deduplication |
 | M4 | Metadata and cover | Metadata fallbacks, 1404×1872 grayscale cover (lead image or typographic), heading-based table of contents |

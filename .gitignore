@@ -1,0 +1,8 @@
+# Built binaries
+/link2epub
+/link2epub.exe
+/dist/
+
+# Test output
+*.test
+*.out

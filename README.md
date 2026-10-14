@@ -216,7 +216,7 @@ See [`PLAN.md`](PLAN.md) for the full design.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M0 | Project setup and `-URL` / `-SAVE` / `-FORCE` handling | Planned |
+| M0 | Project setup, flag handling, saving rules (`-SAVE`, `-FORCE`, folders) | Done |
 | M1 | Basic working version: text-only EPUB | Planned |
 | M2 | Clean XHTML and the e-ink stylesheet | Planned |
 | M3 | Images processed for e-ink | Planned |
