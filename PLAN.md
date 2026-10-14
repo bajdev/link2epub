@@ -6,13 +6,29 @@ link2epub is a command-line program written in Go. You give it a web page URL an
 
 ```bash
 link2epub -URL https://example.com/some-article -SAVE ~/Books/some-article.epub
-link2epub -URL https://example.com/some-article -SAVE ~/Books/      # a directory: filename comes from the article title
+link2epub -URL https://example.com/some-article -SAVE ~/Books/      # a folder (created if missing): filename comes from the article title
+link2epub -URL https://example.com/some-article -SAVE ~/Books/a.epub -FORCE   # replace an existing file
 ```
+
+### Target devices
+
+The primary targets are two grayscale e-ink readers. Every output decision (image format, image size, CSS, cover) is tuned for them first:
+
+| | reMarkable 2 | Kobo Clara HD |
+|---|---|---|
+| Screen | 10.3", 1872×1404 px, 226 PPI | 6", 1448×1072 px, 300 PPI |
+| Colour | Grayscale only | Grayscale only (16 levels, E Ink Carta) |
+| Aspect ratio | 3:4 | ≈3:4 |
+| EPUB rendering | Reflows EPUB with its own renderer; limited CSS support | Plain `.epub` uses the older Adobe RMSDK engine; `.kepub.epub` uses Kobo's faster WebKit engine |
+| Getting the book onto it | reMarkable desktop or mobile app, the USB web interface (`http://10.11.99.1`), or cloud sync | USB mass storage (FAT32): copy the file onto the device |
+
+Both screens share a 3:4 aspect ratio, so one image size and one cover size fit both. The plain EPUB output must work on both devices. Kobo-specific output (KEPUB) is opt-in; see §5.7.
 
 ### Scope for v1
 - One URL in, one EPUB out.
 - Extracts the main content plus metadata: title, author, date, site name, language.
-- Images are downloaded and embedded, so the book works offline.
+- Images are downloaded and embedded, so the book works offline. They are converted to grayscale and sized for the target screens.
+- Never overwrites an existing file unless `-FORCE` is given. Missing output folders are created.
 - The output passes `epubcheck` (the standard EPUB validator) with zero errors.
 - Ships as a single static binary with no runtime dependencies.
 
@@ -26,18 +42,22 @@ link2epub -URL https://example.com/some-article -SAVE ~/Books/      # a director
 
 ## 2. Command-line interface
 
-The program uses Go's standard-library `flag` package. Flag names are case-sensitive, exactly `-URL` and `-SAVE`. (`flag` also accepts `--URL` and `--SAVE`.)
+The program uses Go's standard-library `flag` package. Flag names are case-sensitive: exactly `-URL`, `-SAVE` and `-FORCE`. (`flag` also accepts `--URL` and the other double-dash forms.)
 
 ```
-Usage: link2epub -URL <url> -SAVE <path>
+Usage: link2epub -URL <url> -SAVE <path> [-FORCE]
 
   -URL string
         Web page to convert (required). Must be http:// or https://.
   -SAVE string
-        Where to write the EPUB (required).
-          - Ends in .epub        → written to exactly that file
-          - Existing directory   → <dir>/<slug-of-article-title>.epub
-          - Anything else        → treated as a file path; ".epub" is appended if missing
+        Where to write the EPUB (required). Missing folders are created.
+          - Ends in "/"            → a folder: <folder>/<slug-of-article-title>.epub
+          - An existing folder     → same as above
+          - Ends in .epub          → written to exactly that file
+          - Anything else          → treated as a file path; ".epub" is appended
+  -FORCE
+        Overwrite the output file if it already exists. Without it, an
+        existing file is never touched and the program exits with code 5.
 ```
 
 How the flags behave:
@@ -47,9 +67,18 @@ How the flags behave:
   - Any positional arguments left over are an error, which catches typos like `-url`.
 - **The `-SAVE` path**:
   - A leading `~` is expanded, in case the shell didn't do it (for example, when the path is quoted).
-  - The parent directory must already exist. The program doesn't create directory trees on its own.
-  - The file is written to a temporary file in the same directory, then renamed into place. A failed run never leaves a half-written `.epub` behind.
-  - If the target file already exists, it is overwritten. Adding a `-force` flag later is an option; see §10.
+  - A path that doesn't exist yet is a file unless it ends in `/`. So `-SAVE ~/Books/new/` creates the folder `new`, while `-SAVE ~/Books/new` writes `~/Books/new.epub`.
+  - **Folders are created automatically** (`os.MkdirAll`, mode `0755`), including any missing parent folders. They are created only at save time, so a run that fails earlier (for example, the download fails) doesn't leave empty folders behind.
+  - If part of the path exists as a regular file (for example, `~/Books` is a file), the program fails with exit code `4` and a clear message.
+- **Overwrite protection (`-FORCE`)**:
+  - **Without `-FORCE`**:
+    - An existing file at the output path is never modified. The program prints `error: <path> already exists (use -FORCE to overwrite)` and exits with code `5`.
+    - The check runs as early as possible, to avoid wasted downloads. When `-SAVE` names a file, the check runs before the page is fetched. When `-SAVE` names a folder, the filename depends on the article title, so the check runs right after extraction and before any images are downloaded.
+    - The final write is also race-free, in case another program creates the file mid-run. The name is first reserved with `O_CREATE|O_EXCL`, which fails if the file exists. The book is then written to a temp file in the same folder and renamed over the reservation. If anything fails, both the reservation and the temp file are removed.
+  - **With `-FORCE`**:
+    - The existing file is replaced atomically (written to a temp file, then renamed into place). Until the new file is fully written, the old one stays intact.
+    - `-FORCE` never deletes a folder. If the output path is an existing folder, the "existing folder" rule from `-SAVE` applies instead.
+  - Either way, a failed run never leaves a half-written `.epub` behind.
 - **Exit codes**:
 
   | Code | Meaning |
@@ -58,9 +87,11 @@ How the flags behave:
   | `1` | Fetch failed (network error, non-200 status, page isn't HTML). |
   | `2` | Bad arguments. |
   | `3` | No readable content could be extracted. |
-  | `4` | Building or writing the EPUB failed. |
+  | `4` | Building or writing the EPUB failed (including folder creation). |
+  | `5` | The output file already exists and `-FORCE` was not given. |
 
 - **Output**: progress and warnings go to stderr (for example, `warning: image https://… failed: 404`), so stdout stays clean for scripting.
+- **Saving straight to a Kobo**: `-SAVE /media/<user>/KOBOeReader/Articles/` works, because the Kobo mounts as a FAT32 USB drive. Filenames are already restricted to ASCII letters, digits and `-`, which FAT32 accepts. The folder is created on the device if it's missing.
 
 ---
 
@@ -70,15 +101,18 @@ The project targets Go 1.24 or newer. The module path is `github.com/bajdev/link
 
 | Concern | Package | Why |
 |---|---|---|
-| CLI | `flag` (stdlib) | Matches the `-URL` / `-SAVE` style with no extra dependency |
+| CLI | `flag` (stdlib) | Matches the `-URL` / `-SAVE` / `-FORCE` style with no extra dependency |
 | HTTP | `net/http` (stdlib) | Timeouts, redirects and proxy support are built in |
 | Charset decoding | `golang.org/x/net/html/charset` | Picks the encoding from the HTTP header, then the `<meta>` tag, then detection |
 | HTML parsing / DOM work | `golang.org/x/net/html` + `github.com/PuerkitoBio/goquery` | Standard parser, plus jQuery-style selection for the cleanup passes |
 | Content extraction | `github.com/markusmobius/go-trafilatura` | Go port of trafilatura. Returns metadata (title, author, date, site name, language, image), and already falls back to readability and DOM-distiller internally |
 | Sanitizing | `github.com/microcosm-cc/bluemonday` | Mature allow-list HTML sanitizer |
-| Images | `image/jpeg`, `image/png`, `image/gif` (stdlib), `golang.org/x/image/webp`, `golang.org/x/image/draw` | Decoding, WebP support and high-quality resizing |
+| Images | `image/jpeg`, `image/png`, `image/gif`, `image/color/palette` (stdlib), `golang.org/x/image/webp`, `golang.org/x/image/draw` | Decoding (WebP included), high-quality resizing, grayscale conversion and 16-level quantizing |
+| SVG images | `github.com/srwiley/oksvg` + `github.com/srwiley/rasterx` | Pure-Go SVG rasterizer. SVGs are turned into grayscale PNGs, because neither target renders SVG reliably |
 | AVIF images (optional) | `github.com/gen2brain/avif` | Pure Go (WASM-based), so the binary still needs no cgo |
 | EPUB packaging | `github.com/go-shiori/go-epub` | Maintained fork of `bmaupin/go-epub`. Writes EPUB 3 with a nav document, an NCX, cover, CSS and images |
+| Cover text | `golang.org/x/image/font/opentype` + an embedded open-licensed font (e.g. Literata, SIL OFL) | Draws the title on generated covers |
+| KEPUB output (optional, §5.7) | `github.com/pgaskin/kepubify/v4/kepub` | The standard Go library for converting EPUB to Kobo's KEPUB format |
 | Book identifier | `github.com/google/uuid` | `uuid.NewSHA1` gives a stable ID for each URL |
 | Testing | `testing` + `net/http/httptest` (stdlib), `epubcheck` in CI | A real local HTTP server instead of mocks |
 | Lint | `go vet`, `staticcheck` or `golangci-lint` | |
@@ -118,13 +152,15 @@ link2epub/
 │   ├── fetch/fetch.go       # HTTP client, size limits, charset decoding
 │   ├── extract/extract.go   # go-trafilatura + metadata fallbacks
 │   ├── clean/clean.go       # URL resolution, lazy images, sanitizing, XHTML output
-│   ├── assets/assets.go     # concurrent image download, conversion, resizing
+│   ├── device/profile.go    # e-ink target constants (image box, gray levels, cover size)
+│   ├── assets/assets.go     # concurrent image download, grayscale conversion, resizing
 │   ├── build/
 │   │   ├── build.go         # go-epub packaging
 │   │   ├── cover.go         # generated cover when the article has no lead image
 │   │   ├── chapter.tmpl     # title / byline / source header
 │   │   └── style.css        # embedded with //go:embed
-│   └── save/save.go         # path resolution, slugify, atomic write
+│   ├── kepub/kepub.go       # optional KEPUB conversion for Kobo (§5.7)
+│   └── save/save.go         # path resolution, folder creation, -FORCE handling, atomic write
 └── testdata/
     ├── pages/               # saved HTML: blog, news, Substack, docs, lazy images, Shift-JIS, RTL
     └── golden/              # expected extraction output (title, author, text)
@@ -159,14 +195,35 @@ type Article struct {
 }
 ```
 
+### Device profile (`internal/device`)
+
+The e-ink tuning lives in one place, so a different device can be supported later by adding a second profile:
+
+```go
+// EInk targets reMarkable 2 (1404×1872) and Kobo Clara HD (1072×1448).
+// Both are 3:4 grayscale, so images are sized to the larger screen and
+// the Kobo scales them down.
+var EInk = Profile{
+    MaxImageWidth:  1404,
+    MaxImageHeight: 1872,
+    CoverWidth:     1404,
+    CoverHeight:    1872,
+    Grayscale:      true,
+    GrayLevels:     16,   // both panels display 16 shades
+    JPEGQuality:    80,
+}
+```
+
 The `main` function stays thin:
 
 ```go
 func main() {
     urlFlag  := flag.String("URL", "", "web page to convert (required)")
-    saveFlag := flag.String("SAVE", "", "file or directory to write the EPUB to (required)")
+    saveFlag := flag.String("SAVE", "", "file or folder to write the EPUB to (required)")
+    force    := flag.Bool("FORCE", false, "overwrite the output file if it already exists")
     flag.Parse()
-    // validate → ctx with signal.NotifyContext(SIGINT) → pipeline.Run → save.Write → print path
+    // validate → resolve -SAVE → early exists-check (unless -FORCE)
+    // → ctx with signal.NotifyContext(SIGINT) → pipeline.Run → save.Write(path, book, force) → print path
 }
 ```
 
@@ -204,7 +261,7 @@ EPUB content files must be **well-formed XHTML**, and e-readers are strict about
 1. **Make URLs absolute**: resolve every `href` and `src` against the final page URL with `url.ResolveReference`.
 2. **Fix lazy-loaded images**:
    - Move `data-src`, `data-original` or `data-lazy-src` into `src` when one is present.
-   - Pick the candidate from `srcset` or `<picture><source>` that is closest to 1600 px wide.
+   - Pick the smallest candidate from `srcset` or `<picture><source>` that is at least 1404 px wide (the reMarkable's screen width). If none is that wide, take the largest.
    - Remove 1×1 tracking pixels, and images without a usable `src`.
 3. **Replace embeds**: turn YouTube, Vimeo and Twitter/X iframes into a paragraph link (`▶ Video: <link>`), so the reader knows something was there.
 4. **Sanitize** with a `bluemonday` policy built from an allow-list:
@@ -218,22 +275,31 @@ EPUB content files must be **well-formed XHTML**, and e-readers are strict about
 - Collects every `<img src>` in the cleaned content, plus the lead image.
 - Downloads them concurrently with an `errgroup` and a limit of 8 at a time. Each request sends `Referer: <article URL>`, because some CDNs require it, and each image is capped at 10 MB.
 - Names files by content hash (`images/<sha1[:12]>.<ext>`), so duplicate images are stored once. Each `src` is rewritten to its local filename.
-- **Formats**:
-  - JPEG, PNG and GIF stay as they are. These are EPUB core media types.
-  - WebP and AVIF are decoded and re-encoded: as JPEG at quality 85 for opaque images, or as PNG when the image has transparency. WebP is allowed in EPUB 3.3, but many older e-readers can't show it.
-  - SVG is kept only after a basic cleanup: `<script>`, `on*` attributes and external references are removed.
-  - Images in any other format are dropped, and their alt text is kept as a placeholder.
-- **Size**: images larger than 1600 px on the long edge are downscaled with `draw.CatmullRom`.
-- A failed image download is a warning on stderr, never a fatal error. The `<img>` becomes `<p class="missing-image">[Image: alt text]</p>`.
+- **Every image is processed for e-ink**, using the values in `device.EInk`:
+  1. **Decode** JPEG, PNG, GIF and WebP (and AVIF, if that optional decoder is included). SVG is rasterized with `oksvg` at the target width. GIFs keep only their first frame, since e-ink can't animate. Images in any other format are dropped, and their alt text is kept as a placeholder.
+  2. **Flatten transparency onto white.** Some readers draw transparent areas as black, which ruins logos and diagrams.
+  3. **Convert to grayscale** using the luminance formula (BT.601). Both devices are grayscale anyway, so the image looks the same, and the file is about a third of the size. Doing it ahead of time also keeps each device's own conversion from altering the result.
+  4. **Resize** to fit inside 1404×1872, keeping the aspect ratio, with `draw.CatmullRom`. Images are never upscaled.
+  5. **Encode**:
+     - Photos (many distinct tones) become 8-bit grayscale JPEG at quality 80.
+     - Line art, screenshots, charts and diagrams (few distinct tones) become PNG, quantized to a 16-level gray palette. That matches the panels exactly and keeps text in screenshots crisp, with no JPEG artifacts.
+     - The choice is made per image by counting distinct gray levels after conversion.
+  - WebP and SVG are never written into the book. Kobo's RMSDK renderer can't display WebP, and SVG support on both devices is unreliable.
+- A failed download or decode is a warning on stderr, never a fatal error. The `<img>` becomes `<p class="missing-image">[Image: alt text]</p>`.
+- Files stay small: a typical article with 10 images should come out well under 5 MB. That matters for the reMarkable, which converts each EPUB on import, and for page-turn speed on the Clara HD.
 
 ### 5.5 build
 Uses `go-epub`:
 - `epub.NewEpub(title)`, then sets:
   - author, language, description, and a UUID identifier (`uuid.NewSHA1` of the URL, so rebuilding the same URL gives the same ID);
   - `dc:source` set to the URL, and the publisher set to the site name.
-- `AddCSS` with the embedded `style.css`:
-  - a serif body font, `img { max-width: 100% }`, `pre { white-space: pre-wrap }`, simple table borders;
-  - no fixed font sizes, so the reader's own font settings still apply.
+- `AddCSS` with the embedded `style.css`, written for e-ink and for the limited CSS support of RMSDK and the reMarkable:
+  - **No colour and no gray text.** Body text, bylines, captions and links are all pure black. Links are shown by an underline, not colour, because gray or coloured text looks faint on e-ink.
+  - **No background colours or shading**, including on `pre`, `blockquote` and table headers. Light gray fills turn into dithered noise on e-ink. Blockquotes get a solid black left border instead. Table headers are bold with 1px solid black borders.
+  - **Let the reader control layout.** No fixed font sizes, no `font-family` beyond generic `serif`/`monospace`, and no page margins or `max-width` in px. Both devices apply the user's own font, size and margin settings.
+  - **Images**: `img { max-width: 100%; height: auto; }` and figures set to `page-break-inside: avoid`, so a figure isn't split across two pages.
+  - **Code**: `pre { white-space: pre-wrap; word-wrap: break-word; font-size: 0.85em; }`. E-ink can't scroll sideways, so long lines must wrap.
+  - Only simple, widely supported CSS is used: no flexbox, grid, `calc()` or CSS variables, which RMSDK ignores or mis-renders.
 - Adds every image with `AddImage`, from a local temp file or data URL, so go-epub never downloads anything itself.
 - Adds one chapter with `AddSection(body, title, "chapter.xhtml", cssPath)`. The body is `chapter.tmpl` filled in:
   ```html
@@ -246,12 +312,33 @@ Uses `go-epub`:
   - inject `id` anchors into those headings;
   - add `AddSubSection` entries pointing to them.
   - go-epub writes both the EPUB 3 `nav.xhtml` and an NCX for older readers.
-- The **cover** uses the lead image when one exists. Otherwise a simple typographic cover is generated: 1600×2560, showing the title and site name, drawn with `image/draw` and `golang.org/x/image/font` using an embedded open-licensed font. It is set with `SetCover`.
+- The **cover** is always 1404×1872 grayscale JPEG. That is the reMarkable's exact screen size and the same 3:4 shape as the Clara HD, so it fills the screen on both devices and in their library views.
+  - With a lead image: the image is cropped to fill the top two-thirds, with the title and site name set in large black text on a white band below. Library thumbnails are tiny on e-ink, so the title must be readable at thumbnail size.
+  - Without one: a plain typographic cover with the title, site name and date in black on white, with a thin black rule.
+  - Text is drawn with `x/image/font/opentype` and the embedded font. Long titles are wrapped and shrunk to fit.
+  - It is set with `SetCover`. go-epub also writes the cover page and the `cover-image` property that Kobo and reMarkable use for thumbnails.
 
 ### 5.6 save
-- Resolves the final path using the `-SAVE` rules in §2.
-- Builds the filename slug from the title: lowercase ASCII, with runs of other characters collapsed to `-`, at most 80 characters. If the slug comes out empty, the filename falls back to `article.epub`.
-- Calls `e.WriteTo()` into an `os.CreateTemp(dir, ".link2epub-*")` file, then `fsync`, then `os.Rename` to the final path. The temp file is removed on any error.
+- `save.Resolve(saveFlag, title)` turns `-SAVE` into the final file path, using the rules in §2.
+  - The filename slug comes from the title: lowercase ASCII, with runs of other characters collapsed to `-`, at most 80 characters. If the slug comes out empty, the filename falls back to `article.epub`.
+  - Because the slug never contains path separators, nothing from the page can steer the file outside the chosen folder.
+- `save.CheckExists(path, force)` is the early check from §2. It is called by `main` before fetching when `-SAVE` names a file, and by the pipeline right after extraction when it names a folder.
+- `save.Write(path, book, force)`:
+  1. `os.MkdirAll(filepath.Dir(path), 0o755)`.
+  2. Without `force`: reserve the name with `os.OpenFile(path, O_CREATE|O_EXCL|O_WRONLY, 0o644)`. If that returns `fs.ErrExist`, stop with exit code 5.
+  3. Write the book with `e.WriteTo()` into `os.CreateTemp(dir, ".link2epub-*")`, then `Sync` and `Close` it.
+  4. `os.Rename(temp, path)`. This replaces either the reservation or, with `-FORCE`, the old file.
+  5. On any error, remove the temp file and the reservation, but never a file that existed before the run.
+- Rename-into-place works on FAT32 too, so saving straight onto a Kobo is safe.
+
+### 5.7 KEPUB for Kobo (optional, `-KEPUB`)
+The Clara HD renders plain `.epub` files with Adobe's older RMSDK engine. Files ending in `.kepub.epub` use Kobo's own WebKit-based engine instead, which gives:
+- faster page turns and better CSS support;
+- reading statistics, such as time left in the chapter.
+
+An optional `-KEPUB` flag would run the finished EPUB through `kepubify`'s Go package before saving, and use the `.kepub.epub` extension. kepubify wraps sentences in spans and adds Kobo's style hooks.
+
+KEPUB is **not** the default. The reMarkable expects a plain EPUB, and one plain file that works on both devices is the safer default. See §10.
 
 ---
 
@@ -264,9 +351,11 @@ Uses `go-epub`:
 | Bot protection (Cloudflare and similar) | Use a realistic UA. Otherwise report the 403 clearly. Never try to get around it |
 | Malformed HTML | `x/net/html` follows the HTML5 parsing algorithm, so it always produces a tree |
 | Non-UTF-8 pages | Decoded with `x/net/html/charset`. Output is always UTF-8 |
-| Huge pages or images | 20 MB page cap, 10 MB per image, downscaling |
+| Huge pages or images | 20 MB page cap, 10 MB per image, downscaling to 1404×1872 |
+| Charts that rely on colour | Grayscale makes some colours look identical, so a legend can become unreadable. v1 keeps the image as is and the alt text or caption. Raising contrast is a possible later improvement |
+| Wide tables on a 6" screen | CSS lets tables wrap their cells. A table wider than the screen stays readable on the reMarkable but may be cramped on the Clara HD. Turning wide tables into images is out of scope |
+| Long code lines | `pre-wrap`, because e-ink readers can't scroll sideways |
 | Math (MathJax/KaTeX) | Keep MathML if the page has it (EPUB 3 supports MathML). Otherwise keep the TeX source as text |
-| Code blocks | Keep `<pre><code>`, with CSS `pre-wrap` |
 | Right-to-left languages | Carry `lang` and `dir` through, and set the spine's `page-progression-direction` |
 | Copyright | For personal offline reading. Every book records the source URL in `dc:source` and in the chapter header |
 
@@ -284,13 +373,26 @@ Uses `go-epub`:
   - `fetch`: `httptest.Server` covering redirects, 404, 429 retry, wrong content type, oversized body, Shift-JIS and ISO-8859-1 pages.
   - `extract`: golden tests over `testdata/pages/*.html`, compared with `testdata/golden/*.json`. A `-update` flag regenerates the golden files.
   - `clean`: lazy-image and `srcset` selection, sanitizing, heading changes, and an XHTML well-formedness check on every fixture.
-  - `assets`: WebP→JPEG, transparent→PNG, resizing, deduplication, failed downloads.
-  - `save`: `-SAVE` resolution (`.epub` file, existing directory, missing extension, missing parent directory, `~`), slug generation, the atomic write leaving nothing behind on error.
+  - `assets`: every output image is grayscale and fits 1404×1872. A photo becomes JPEG, line art becomes a 16-level PNG. Transparency is flattened to white. WebP and SVG input never appear in the output. The first frame is taken from animated GIFs. Images are never upscaled. Also covers deduplication and failed downloads.
+  - `save`, all in `t.TempDir()`:
+    - `-SAVE` resolution: `.epub` file, existing folder, trailing `/`, missing extension, `~`.
+    - Folder creation: nested missing folders, and part of the path being an existing file (exit code 4).
+    - **Without `-FORCE`**: an existing file means exit code 5, with the file's bytes and modification time unchanged. A file created by someone else between the early check and the write is also left untouched.
+    - **With `-FORCE`**: the file is replaced, and the old file survives if the build fails part-way.
+    - No temp or reservation files are left behind after any failure.
 - **End-to-end** (`cmd/link2epub`): an `httptest.Server` serves a fixture page and its images. The test runs the CLI with `-URL` and `-SAVE`, then checks:
   - the exit code;
   - the zip layout: `mimetype` is the first entry and stored uncompressed, `META-INF/container.xml` exists, every manifest item is present;
   - `epubcheck` reports zero errors.
-- **CLI flag tests**: missing flags, bad URL, extra arguments, and the exit code for each.
+- **CLI flag tests**: missing flags, bad URL, extra arguments, `-FORCE`, and the exit code for each. An existing output file must fail before any HTTP request is made: the test server counts its requests.
+- **Device checks (manual, at each milestone from M3 onward)**: sideload a set of reference books onto a real reMarkable 2 and Kobo Clara HD. The set covers a long text article, an image-heavy post, code and tables, and a non-Latin script. Check:
+  - the cover and its thumbnail in the library;
+  - the table of contents;
+  - image sharpness;
+  - page-turn speed;
+  - that the user's font and size settings still apply.
+
+  Record the results in `docs/device-testing.md`.
 - **CI (GitHub Actions)**:
   - `go vet`, `staticcheck` and `go test -race ./...`;
   - epubcheck (Java) for the end-to-end test;
@@ -302,12 +404,13 @@ Uses `go-epub`:
 
 | # | Milestone | Deliverable |
 |---|---|---|
-| M0 | Scaffold | `go.mod`, layout, `main.go` with `-URL`/`-SAVE` parsing and validation, CI workflow |
-| M1 | Basic working version | fetch, trafilatura and go-epub produce a text-only EPUB saved to `-SAVE` |
-| M2 | Clean XHTML | Sanitizer, URL resolution, heading changes, chapter template and CSS. epubcheck passes in CI |
-| M3 | Images | Lazy-image fixes, concurrent download, WebP/AVIF conversion, resizing, deduplication |
-| M4 | Metadata and cover | Metadata fallbacks, lead-image or generated cover, heading-based table of contents |
-| M5 | Polish and release | Atomic save, error messages and exit codes, README, goreleaser binaries |
+| M0 | Scaffold | `go.mod`, layout, `main.go` with `-URL`/`-SAVE`/`-FORCE` parsing and validation, CI workflow |
+| M1 | Basic working version | fetch, trafilatura and go-epub produce a text-only EPUB. `save` already handles folder creation, `-FORCE` and atomic writes |
+| M2 | Clean XHTML and e-ink CSS | Sanitizer, URL resolution, heading changes, chapter template, e-ink stylesheet. epubcheck passes in CI. First check on real devices |
+| M3 | Images for e-ink | Lazy-image fixes, concurrent download, grayscale, resizing to 1404×1872, JPEG or 16-level PNG choice, SVG rasterizing, deduplication |
+| M4 | Metadata and cover | Metadata fallbacks, 1404×1872 grayscale cover (lead image or typographic), heading-based table of contents |
+| M5 | Polish and release | Error messages and exit codes, README with device instructions, goreleaser binaries |
+| M6 | *(optional)* KEPUB | `-KEPUB` flag via kepubify, tested on the Clara HD |
 
 Each milestone is a separate PR. After M1 the core job already works from end to end.
 
@@ -321,11 +424,11 @@ Each milestone is a separate PR. After M1 the core job already works from end to
   - `-TITLE` and `-AUTHOR` overrides;
   - `-COVER` for a custom cover image;
   - `-NOIMAGES`;
-  - `-GRAYSCALE` for e-ink;
-  - `-TIMEOUT`;
-  - `-FORCE` to refuse overwrites unless set.
+  - `-TIMEOUT`.
 - **Follow pagination**: follow `rel="next"` links for multi-page articles.
-- **Send to Kindle**: email the result over SMTP.
+- **Send to reMarkable**: upload straight to a USB-connected reMarkable through its web interface (`POST http://10.11.99.1/upload`), or to reMarkable cloud using an `rmapi`-style client.
+- **More device profiles**: a `-DEVICE` flag for colour e-ink (e.g. Kobo Libra Colour) or tablets, so colour images are kept. The `device.Profile` type already allows for this.
+- **Better contrast for e-ink**: optionally raise image contrast and gamma, since images often look washed out on e-ink.
 - **RSS/Atom digest**: turn the last N feed items into one EPUB.
 - **Web service**: an `http.Handler` around `pipeline.Run`. This would need SSRF protection: refuse private and loopback IP addresses, and re-check after each redirect.
 
@@ -333,6 +436,5 @@ Each milestone is a separate PR. After M1 the core job already works from end to
 
 ## 10. Open questions
 
-1. **Overwriting**: when the `-SAVE` file already exists, should link2epub overwrite it (the current plan) or refuse unless `-FORCE` is given?
-2. **Missing directories**: should a `-SAVE` path whose parent directory doesn't exist be created automatically (`os.MkdirAll`), or rejected (the current plan)?
-3. **Target devices**: if Kindle or e-ink readers are the main target, images could default to grayscale and smaller sizes.
+1. **KEPUB for the Kobo**: should `-KEPUB` be added (M6), so books on the Clara HD use Kobo's faster renderer? The default would stay plain EPUB, so one file works on both devices.
+2. **Getting books onto the reMarkable**: is saving a local file and uploading it yourself (desktop app or USB web interface) enough, or should link2epub upload to the reMarkable directly (§9)?
