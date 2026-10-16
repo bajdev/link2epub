@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bajdev/link2epub/internal/epubtest"
@@ -24,10 +28,15 @@ type fakeConverter struct {
 	calls int
 }
 
-func (f *fakeConverter) convert(ctx context.Context, u *url.URL) (*pipeline.Book, error) {
+func (f *fakeConverter) convert(ctx context.Context, u *url.URL, opts pipeline.Options) (*pipeline.Book, error) {
 	f.calls++
 	if f.err != nil {
 		return nil, f.err
+	}
+	if opts.BeforeImages != nil {
+		if err := opts.BeforeImages(f.title); err != nil {
+			return nil, err
+		}
 	}
 	return &pipeline.Book{Title: f.title, Content: strings.NewReader("epub:" + f.title)}, nil
 }
@@ -261,8 +270,31 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	essay, err := os.ReadFile("../../testdata/pages/photo-essay.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	images := map[string]string{ // served path → file in testdata/images
+		"/img/press.jpg":   "press.jpg",
+		"/img/diagram.png": "diagram.png",
+		"/img/type.webp":   "gradient.webp",
+	}
+	var imageRequests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/img/") {
+			imageRequests.Add(1)
+			name, ok := images[r.URL.Path]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			http.ServeFile(w, r, filepath.Join("../../testdata/images", name))
+			return
+		}
 		switch r.URL.Path {
+		case "/essays/print-shop":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(essay)
 		case "/posts/eink":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Write(blog)
@@ -351,6 +383,83 @@ func TestEndToEnd(t *testing.T) {
 			}
 		}
 		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("photo essay", func(t *testing.T) {
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/essays/print-shop", "-SAVE", dir)
+		if r.code != exitOK {
+			t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		if !strings.Contains(r.stderr, "warning: image "+srv.URL+"/img/missing.png skipped: server returned 404 Not Found") {
+			t.Errorf("stderr = %q, want a warning about the missing image", r.stderr)
+		}
+		path := filepath.Join(dir, "a-walk-through-the-print-shop.epub")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		book.AssertWellFormed(t)
+
+		var stored []string
+		for _, name := range book.Order {
+			if strings.HasPrefix(name, "EPUB/images/") {
+				stored = append(stored, name)
+			}
+		}
+		if len(stored) != 3 {
+			t.Fatalf("book has images %v, want 3 (photo, diagram, WebP picture)", stored)
+		}
+		for _, name := range stored {
+			img, format, err := image.Decode(strings.NewReader(book.Files[name]))
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			if format != "jpeg" && format != "png" {
+				t.Errorf("%s is %s, want jpeg or png", name, format)
+			}
+			if b := img.Bounds(); b.Dx() > 1404 || b.Dy() > 1872 {
+				t.Errorf("%s is %dx%d, larger than the screen", name, b.Dx(), b.Dy())
+			}
+			switch img.(type) {
+			case *image.Gray, *image.Paletted:
+			default:
+				t.Errorf("%s decodes as %T, want grayscale", name, img)
+			}
+		}
+
+		chapter := book.File(t, "chapter.xhtml")
+		for _, want := range []string{
+			`alt="The old printing press"/><figcaption>The 1890s press still runs every Friday.</figcaption></figure>`,
+			`alt="How ink reaches the paper"/></figure>`,
+			`alt="Drawers of wooden type"/></figure>`,
+			`<span class="missing-image">[Image: small press icon]</span>`,
+			`<p class="byline">Grace Hopper · Letterpress Weekly</p>`, // no invented date
+		} {
+			if !strings.Contains(chapter, want) {
+				t.Errorf("chapter is missing %q", want)
+			}
+		}
+		if strings.Contains(chapter, "tracker.example") || strings.Contains(chapter, `<img src="http`) {
+			t.Errorf("chapter references remote images:\n%s", chapter)
+		}
+		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("existing file stops before images are downloaded", func(t *testing.T) {
+		dir := t.TempDir()
+		existing := filepath.Join(dir, "a-walk-through-the-print-shop.epub")
+		writeFile(t, existing, "old")
+		before := imageRequests.Load()
+		r := realRun("-URL", srv.URL+"/essays/print-shop", "-SAVE", dir)
+		if r.code != exitExists {
+			t.Errorf("exit code = %d, want %d; stderr = %q", r.code, exitExists, r.stderr)
+		}
+		if n := imageRequests.Load() - before; n != 0 {
+			t.Errorf("%d images downloaded, want 0", n)
+		}
+		assertFile(t, existing, "old")
 	})
 
 	t.Run("not found", func(t *testing.T) {

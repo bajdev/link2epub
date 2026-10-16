@@ -14,11 +14,14 @@ import (
 //   - It makes every link absolute. go-trafilatura resolves relative links
 //     as if the page URL were a folder ("../faq" on /docs/config becomes
 //     /docs/faq instead of /faq), so they must be absolute before it runs.
+//   - It fixes images for go-trafilatura, which only looks at src; see
+//     prepareImages.
 //   - It replaces embedded YouTube and Vimeo players, which can't play on an
 //     e-reader and would otherwise vanish without a trace, with a paragraph
 //     linking to the video.
 func Prepare(doc *html.Node, base *url.URL) {
 	resolveLinks(doc, base)
+	prepareImages(doc, base)
 
 	var iframes []*html.Node
 	walk(doc, func(n *html.Node) {

@@ -167,6 +167,25 @@ func TestFetchSniffsMissingContentType(t *testing.T) {
 	}
 }
 
+func TestFetchSniffsOctetStream(t *testing.T) {
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if r.URL.Path == "/page" {
+			w.Write([]byte("<!DOCTYPE html><html><body><p>sniffed</p></body></html>"))
+		} else {
+			w.Write([]byte("%PDF-1.7 binary"))
+		}
+	})
+
+	page, err := testFetcher().Fetch(context.Background(), mustParse(t, srv.URL+"/page"))
+	if err != nil || !strings.Contains(page.HTML, "sniffed") {
+		t.Errorf("HTML page: err = %v", err)
+	}
+	if _, err := testFetcher().Fetch(context.Background(), mustParse(t, srv.URL+"/file")); err == nil {
+		t.Error("binary file was accepted as a web page")
+	}
+}
+
 func TestFetchRejectsLargePages(t *testing.T) {
 	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")

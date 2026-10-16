@@ -107,12 +107,25 @@ img {
   height: auto;
 }
 
+/* Images are already grayscale and sized for the screen (see internal/assets). */
 figure {
   margin: 1em 0;
+  text-align: center;
   page-break-inside: avoid;
 }
 
+figure img {
+  display: block;
+  margin: 0 auto;
+}
+
+/* Stands in for an image that couldn't be downloaded. */
+.missing-image {
+  font-style: italic;
+}
+
 figcaption {
+  text-align: left;
   font-style: italic;
   font-size: 0.9em;
   margin-top: 0.3em;

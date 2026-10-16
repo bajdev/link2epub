@@ -2,7 +2,8 @@
 // for an EPUB chapter.
 //
 // Prepare runs on the whole page before extraction; Content runs on the
-// extracted article.
+// extracted article, and Render serializes the result once images have been
+// processed.
 package clean
 
 import (
@@ -21,8 +22,7 @@ import (
 
 // policy is the allow-list from PLAN.md §5.3. Anything not listed is
 // removed; the text inside removed elements is kept, except for elements
-// such as script and style whose content is dropped too. Images are added
-// in milestone M3, together with downloading them.
+// such as script and style whose content is dropped too.
 var policy = func() *bluemonday.Policy {
 	p := bluemonday.NewPolicy()
 	p.AllowElements(
@@ -36,6 +36,8 @@ var policy = func() *bluemonday.Policy {
 	p.AllowURLSchemes("http", "https", "mailto")
 	p.AllowRelativeURLs(true) // made absolute by resolveLinks
 	p.RequireParseableURLs(true)
+	p.AllowAttrs("src", "alt").OnElements("img")
+	p.AllowDataURIImages()
 	p.AllowAttrs("title").OnElements("abbr")
 	p.AllowAttrs("colspan", "rowspan").Matching(regexp.MustCompile(`^[1-9][0-9]{0,2}$`)).OnElements("th", "td")
 	p.AllowAttrs("lang").Matching(regexp.MustCompile(`^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{1,8})*$`)).Globally()
@@ -44,15 +46,15 @@ var policy = func() *bluemonday.Policy {
 }()
 
 // Content sanitizes the children of n, the extracted article, and returns
-// them as an XHTML fragment. Relative links are resolved against base, and
-// headings are shifted so the article's top level is <h2>, below the
-// chapter title. It fails rather than return markup that isn't well-formed,
-// because e-readers refuse to open such books.
-func Content(n *html.Node, base *url.URL) (string, error) {
+// them under a new <body> node. Relative links are resolved against base,
+// headings are shifted so the article's top level is <h2> below the chapter
+// title, and standalone images are wrapped in <figure>s with their
+// captions.
+func Content(n *html.Node, base *url.URL) (*html.Node, error) {
 	var raw strings.Builder
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		if err := html.Render(&raw, c); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 	safe := policy.Sanitize(raw.String())
@@ -62,16 +64,23 @@ func Content(n *html.Node, base *url.URL) (string, error) {
 	body := &html.Node{Type: html.ElementNode, Data: "body", DataAtom: atom.Body}
 	nodes, err := html.ParseFragment(strings.NewReader(safe), body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	for _, c := range nodes {
 		body.AppendChild(c)
 	}
 	resolveLinks(body, base)
 	restoreCodeBlocks(body)
+	buildFigures(body)
 	shiftHeadings(body)
 	removeEmpty(body)
+	return body, nil
+}
 
+// Render serializes the children of body as an XHTML fragment. It fails
+// rather than return markup that isn't well-formed, because e-readers
+// refuse to open such books.
+func Render(body *html.Node) (string, error) {
 	var out strings.Builder
 	for c := body.FirstChild; c != nil; c = c.NextSibling {
 		if err := html.Render(&out, c); err != nil {
@@ -89,18 +98,23 @@ func Content(n *html.Node, base *url.URL) (string, error) {
 // "https://example.com/post/mailto:a@example.com".
 var mangledScheme = regexp.MustCompile(`/((?:mailto|tel):.*)$`)
 
-// resolveLinks makes every href absolute.
+// resolveLinks makes every link href and image src absolute.
 func resolveLinks(n *html.Node, base *url.URL) {
 	walk(n, func(n *html.Node) {
-		if n.DataAtom != atom.A {
+		key := "href"
+		switch n.DataAtom {
+		case atom.A:
+		case atom.Img:
+			key = "src"
+		default:
 			return
 		}
 		for i, a := range n.Attr {
-			if a.Key != "href" {
+			if a.Key != key {
 				continue
 			}
 			href := a.Val
-			if m := mangledScheme.FindStringSubmatch(href); m != nil {
+			if m := mangledScheme.FindStringSubmatch(href); m != nil && key == "href" {
 				href = m[1]
 			}
 			if u, err := base.Parse(href); err == nil {
@@ -172,10 +186,20 @@ func shiftHeadings(n *html.Node) {
 	})
 }
 
-// removeEmpty drops paragraphs, headings and list items left with no text
+// removeEmpty drops images left without a source (the sanitizer removes
+// unsafe ones), then paragraphs, headings and list items left with no text
 // and no image, such as those that only held a removed embed.
 func removeEmpty(n *html.Node) {
 	var empty []*html.Node
+	walk(n, func(n *html.Node) {
+		if n.DataAtom == atom.Img && strings.TrimSpace(attr(n, "src")) == "" {
+			empty = append(empty, n)
+		}
+	})
+	for _, e := range empty {
+		e.Parent.RemoveChild(e)
+	}
+	empty = nil
 	walk(n, func(n *html.Node) {
 		switch n.DataAtom {
 		case atom.P, atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6, atom.Li:

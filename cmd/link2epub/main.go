@@ -48,7 +48,7 @@ Convert a web article into an EPUB for e-ink readers.
 
 // convertFunc turns a URL into a book. It is pipeline.Run in production and
 // a fake in tests.
-type convertFunc func(ctx context.Context, u *url.URL) (*pipeline.Book, error)
+type convertFunc func(ctx context.Context, u *url.URL, opts pipeline.Options) (*pipeline.Book, error)
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -111,8 +111,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 		}
 	}
 
-	book, err := convert(ctx, pageURL)
+	opts := pipeline.Options{
+		Warn: func(msg string) { fmt.Fprintf(stderr, "warning: %s\n", msg) },
+	}
+	if !target.Known() && !*force {
+		// For folder targets the filename comes from the title; check it
+		// before downloading images.
+		opts.BeforeImages = func(title string) error { return save.CheckExists(target.Path(title)) }
+	}
+	book, err := convert(ctx, pageURL, opts)
 	switch {
+	case errors.Is(err, save.ErrExists):
+		return saveFailure(fail, err)
 	case errors.Is(err, pipeline.ErrFetch):
 		return fail(exitFetch, "%v", err)
 	case errors.Is(err, pipeline.ErrNoContent):
