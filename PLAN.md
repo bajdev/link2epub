@@ -387,6 +387,8 @@ Validation:
 | Charts that rely on colour | Grayscale makes some colours look identical, so a legend can become unreadable. v1 keeps the image as is and the alt text or caption. Raising contrast is a possible later improvement |
 | Wide tables on a 6" screen | CSS lets tables wrap their cells. A table wider than the screen stays readable on the reMarkable but may be cramped on the Clara HD. Turning wide tables into images is out of scope |
 | Long code lines | `pre-wrap`, because e-ink readers can't scroll sideways |
+| go-trafilatura quirks | Found while building M2, and worked around in `internal/clean`:<br>• It resolves relative links as if the page URL were a folder, so links are made absolute before extraction.<br>• It joins `mailto:`/`tel:` links onto the page path; these are repaired afterwards.<br>• It turns `<pre>` code blocks into `<code>`; block-level `<code>` is turned back into `<pre><code>`. |
+| Table cell spans | go-trafilatura drops `colspan`/`rowspan`, so a table that relies on them can come out with uneven rows. Known limitation in v1 |
 | Math (MathJax/KaTeX) | Keep MathML if the page has it (EPUB 3 supports MathML). Otherwise keep the TeX source as text |
 | Right-to-left languages | Carry `lang` and `dir` through, and set the spine's `page-progression-direction` |
 | Copyright | For personal offline reading. Every book records the source URL in `dc:source` and in the chapter header |

@@ -12,6 +12,7 @@ import (
 	trafilatura "github.com/markusmobius/go-trafilatura"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
+	"golang.org/x/text/language"
 )
 
 // minTextLen is the shortest article text, in characters, worth turning
@@ -34,9 +35,10 @@ type Article struct {
 	Content     *html.Node // the article body; its children are the content
 }
 
-// Extract finds the article in html, which was downloaded from pageURL.
-func Extract(htmlText string, pageURL *url.URL) (*Article, error) {
-	res, err := trafilatura.Extract(strings.NewReader(htmlText), trafilatura.Options{
+// Extract finds the article in doc, a parsed page downloaded from pageURL.
+// It may modify doc.
+func Extract(doc *html.Node, pageURL *url.URL) (*Article, error) {
+	res, err := trafilatura.ExtractDocument(doc, trafilatura.Options{
 		OriginalURL:     pageURL,
 		EnableFallback:  true,
 		IncludeLinks:    true,
@@ -54,18 +56,25 @@ func Extract(htmlText string, pageURL *url.URL) (*Article, error) {
 		Author:      strings.TrimSpace(m.Author),
 		SiteName:    strings.TrimSpace(m.Sitename),
 		Description: strings.TrimSpace(m.Description),
-		Language:    strings.TrimSpace(m.Language),
+		Language:    languageTag(m.Language),
 		Published:   m.Date,
 		Content:     res.ContentNode,
 	}
 	if a.Title == "" {
 		a.Title = pageURL.Hostname()
 	}
-	if a.Language == "" {
-		a.Language = "en"
-	}
 	removeLeadingTitle(a.Content, a.Title)
 	return a, nil
+}
+
+// languageTag returns s as a well-formed BCP 47 tag ("en_US" → "en-US"),
+// or "en" when s is missing or invalid.
+func languageTag(s string) string {
+	tag, err := language.Parse(strings.ReplaceAll(strings.TrimSpace(s), "_", "-"))
+	if err != nil || tag == language.Und {
+		return "en"
+	}
+	return tag.String()
 }
 
 // removeLeadingTitle drops the first element of the content when it is a

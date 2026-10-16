@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en_US">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>Configuring the Sync Daemon &mdash; Docs</title>
+<meta property="og:site_name" content="Example Docs">
+</head>
+<body class="docs">
+<div class="sidebar"><ul><li><a href="/docs/install">Install</a></li><li><a href="/docs/config">Configure</a></li><li><a href="/docs/faq">FAQ</a></li></ul></div>
+<div class="content" role="main">
+<article id="main-article">
+<h1 id="top">Configuring the Sync Daemon</h1>
+<p onclick="track('intro')" style="font-size:18px;color:#666">The sync daemon reads a single configuration file at start-up. This page describes every option, the defaults, and a few common recipes&nbsp;&mdash; including how to keep battery use low on e-ink devices.</p>
+<h2>File location</h2>
+<p>The daemon looks for <code>config.toml</code> in these places, in order:</p>
+<ol>
+<li><code>$XDG_CONFIG_HOME/syncd/config.toml</code></li>
+<li><code>~/.config/syncd/config.toml</code></li>
+<li><code>/etc/syncd/config.toml</code><p>System-wide settings &amp; defaults.</p></li>
+</ol>
+<h2>Options</h2>
+<table class="options">
+<thead><tr><th>Option</th><th>Type</th><th>Default</th><th colspan="0">Notes</th></tr></thead>
+<tr><td><code>interval</code></td><td>duration</td><td>15m</td><td>How often to check for changes. Values under 1m are rounded up.</td></tr>
+<tr><td><code>wifi_only</code></td><td>bool</td><td>true</td><td>Skip syncing on mobile data.</td></tr>
+<tr><td rowspan="2"><code>paths</code></td><td>list</td><td>[]</td><td>Folders to watch &lt;relative to home&gt;.</td></tr>
+<tr><td colspan="3">May be empty, in which case nothing is synced.</td></tr>
+</table>
+<h3>Durations</h3>
+<p>Durations use Go syntax: <kbd>90s</kbd>, <kbd>15m</kbd> or <kbd>1h30m</kbd>. The &ldquo;quotes&rdquo; are optional.</p>
+<h4>Edge cases</h4>
+<dl><dt>Zero</dt><dd>Disables periodic sync; only manual sync runs.</dd><dt>Negative</dt><dd>Rejected at start-up with an error.</dd></dl>
+<h2>Example</h2>
+<pre class="language-toml"><code><span class="k">interval</span> = <span class="s">"30m"</span>
+<span class="k">wifi_only</span> = true
+<span class="k">paths</span> = ["Books", "Articles/very/long/path/that/would/overflow/a/small/e-ink/screen/if/it/did/not/wrap"]
+</code></pre>
+<div class="note"><p><b>Note:</b> restart the daemon after editing &ndash; it does not watch its own config file.<div>See also the <a href="../faq#restart">FAQ</a>.</div></p></div>
+<p>Questions? <a href="mailto:docs@example.com">Email the docs team</a> or <a href="javascript:openChat()">open chat</a>.</p>
+<form class="feedback"><p>Was this page helpful?</p><button>Yes</button><button>No</button></form>
+</article>
+</div>
+<footer><p>&copy; Example Inc.</p></footer>
+<script>analytics.page();</script>
+</body>
+</html>

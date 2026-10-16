@@ -47,7 +47,7 @@ func buildBytes(t *testing.T, a *extract.Article) []byte {
 }
 
 func TestBuild(t *testing.T) {
-	a := testArticle(t, `<h2>Section</h2><p>First &amp; <em>second</em>.<br>Line two.</p><hr><ul><li>One</li></ul>`)
+	a := testArticle(t, `<h1>Section</h1><p>First &amp; <em>second</em>.<br>Line two.</p><hr><ul><li>One</li></ul><script>evil()</script>`)
 	data := buildBytes(t, a)
 	book := epubtest.Open(t, data)
 	book.AssertWellFormed(t)
@@ -67,10 +67,12 @@ func TestBuild(t *testing.T) {
 
 	chapter := book.File(t, "chapter.xhtml")
 	for _, want := range []string{
+		`<div lang="en" xml:lang="en">`,
+		`<link rel="stylesheet" type="text/css" href="../css/style.css"`,
 		"<h1>Tom &amp; Jerry &lt;3</h1>",
 		`<p class="byline">Ada Lovelace · Example News · 14 March 2025</p>`,
 		`<a href="https://example.com/posts/1?a=1&amp;b=2">`,
-		"<h2>Section</h2>",
+		"<h2>Section</h2>", // shifted down from <h1>
 		"First &amp; <em>second</em>.<br/>Line two.",
 		"<hr/>",
 		"<li>One</li>",
@@ -78,6 +80,13 @@ func TestBuild(t *testing.T) {
 		if !strings.Contains(chapter, want) {
 			t.Errorf("chapter is missing %q:\n%s", want, chapter)
 		}
+	}
+
+	if strings.Contains(chapter, "evil()") {
+		t.Errorf("chapter contains a script:\n%s", chapter)
+	}
+	if css := book.File(t, "style.css"); !strings.Contains(css, "border-left: 3px solid #000") {
+		t.Errorf("stylesheet missing or unexpected:\n%s", css)
 	}
 
 	path := filepath.Join(t.TempDir(), "book.epub")

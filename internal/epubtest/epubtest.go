@@ -4,14 +4,14 @@ package epubtest
 import (
 	"archive/zip"
 	"bytes"
-	"encoding/xml"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bajdev/link2epub/internal/clean"
 )
 
 // Book is an opened EPUB.
@@ -80,25 +80,9 @@ func (b *Book) AssertWellFormed(t *testing.T) {
 	for _, name := range b.Order {
 		switch filepath.Ext(name) {
 		case ".xhtml", ".opf", ".ncx", ".xml":
-			if err := WellFormed(b.Files[name]); err != nil {
+			if err := clean.WellFormed(b.Files[name]); err != nil {
 				t.Errorf("%s is not well-formed XML: %v", name, err)
 			}
-		}
-	}
-}
-
-// WellFormed reports whether s parses as XML in strict mode.
-func WellFormed(s string) error {
-	d := xml.NewDecoder(strings.NewReader(s))
-	d.Strict = true
-	d.Entity = nil // only the five predefined XML entities are allowed
-	for {
-		_, err := d.Token()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
 		}
 	}
 }

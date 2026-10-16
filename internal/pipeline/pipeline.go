@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strings"
+
+	"golang.org/x/net/html"
 
 	"github.com/bajdev/link2epub/internal/build"
+	"github.com/bajdev/link2epub/internal/clean"
 	"github.com/bajdev/link2epub/internal/extract"
 	"github.com/bajdev/link2epub/internal/fetch"
 )
@@ -45,7 +49,12 @@ func (p Pipeline) Run(ctx context.Context, u *url.URL) (*Book, error) {
 		return nil, fmt.Errorf("%w: %w", ErrFetch, err)
 	}
 
-	article, err := extract.Extract(page.HTML, page.URL)
+	doc, err := html.Parse(strings.NewReader(page.HTML))
+	if err != nil {
+		return nil, fmt.Errorf("parsing the page: %w", err)
+	}
+	clean.Prepare(doc, page.URL)
+	article, err := extract.Extract(doc, page.URL)
 	if err != nil {
 		return nil, err
 	}

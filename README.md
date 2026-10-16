@@ -8,7 +8,7 @@ Turn any web article into a clean EPUB for your e-ink reader.
 link2epub -URL https://example.com/some-article -SAVE ~/Books/
 ```
 
-> **Status: in development.** The tool is being built from [`PLAN.md`](PLAN.md). It already turns an article into a text-only EPUB. Images, the e-ink stylesheet, covers and `-KEPUB` are still to come, so some of the behaviour below doesn't work yet. See [Roadmap](#roadmap) for progress.
+> **Status: in development.** The tool is being built from [`PLAN.md`](PLAN.md). It already turns an article into a clean, text-only EPUB with the e-ink stylesheet. Images, covers and `-KEPUB` are still to come, so some of the behaviour below doesn't work yet. See [Roadmap](#roadmap) for progress.
 
 ---
 
@@ -218,7 +218,7 @@ See [`PLAN.md`](PLAN.md) for the full design.
 |---|---|---|
 | M0 | Project setup, flag handling, saving rules (`-SAVE`, `-FORCE`, folders) | Done |
 | M1 | Basic working version: text-only EPUB | Done |
-| M2 | Clean XHTML and the e-ink stylesheet | Planned |
+| M2 | Clean XHTML and the e-ink stylesheet | Done |
 | M3 | Images processed for e-ink | Planned |
 | M4 | Metadata, cover and table of contents | Planned |
 | M5 | `-KEPUB` for Kobo | Planned |

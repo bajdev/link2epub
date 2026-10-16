@@ -257,11 +257,18 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	docs, err := os.ReadFile("../../testdata/pages/docs.html")
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/posts/eink":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Write(blog)
+		case "/docs/config":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(docs)
 		case "/app":
 			w.Header().Set("Content-Type", "text/html")
 			w.Write([]byte(`<html><body><div id="root"></div><script src="/app.js"></script></body></html>`))
@@ -298,6 +305,7 @@ func TestEndToEnd(t *testing.T) {
 			"<h1>Why E-Ink Is Easier on the Eyes</h1>",
 			"Ada Lovelace · The Reading Desk · 14 March 2025",
 			"Electronic paper does not shine light into your eyes.",
+			`▶ Video: <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">How E Ink works</a>`,
 		} {
 			if !strings.Contains(chapter, want) {
 				t.Errorf("chapter is missing %q", want)
@@ -305,6 +313,42 @@ func TestEndToEnd(t *testing.T) {
 		}
 		if strings.Contains(chapter, "Great article, thanks!") {
 			t.Errorf("chapter contains page comments")
+		}
+		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("messy documentation page", func(t *testing.T) {
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/docs/config", "-SAVE", dir)
+		if r.code != exitOK {
+			t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		path := filepath.Join(dir, "configuring-the-sync-daemon.epub")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		book.AssertWellFormed(t)
+		chapter := book.File(t, "chapter.xhtml")
+		for _, want := range []string{
+			`<div lang="en" xml:lang="en">`,
+			"<h2>File location</h2>",
+			"<h3>Durations</h3>",
+			"<pre><code>interval = ",
+			"<td><code>wifi_only</code></td>",
+			`<a href="mailto:docs@example.com">`,
+			`<a href="` + srv.URL + `/faq#restart">`,
+			"recipes — including", // &mdash; as a character, not an entity
+		} {
+			if !strings.Contains(chapter, want) {
+				t.Errorf("chapter is missing %q", want)
+			}
+		}
+		for _, unwanted := range []string{"onclick", "style=", "javascript:", "analytics", "<form", "<button", "Was this page helpful"} {
+			if strings.Contains(chapter, unwanted) {
+				t.Errorf("chapter contains %q", unwanted)
+			}
 		}
 		epubtest.EPUBCheck(t, path)
 	})
