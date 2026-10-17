@@ -2,7 +2,11 @@ package clean
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 func TestParseSrcset(t *testing.T) {
@@ -111,5 +115,45 @@ func TestBuildFigures(t *testing.T) {
 				t.Errorf("got  %q\nwant %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestStandInSources(t *testing.T) {
+	for _, src := range []string{
+		"https://thumb.example.org/a/Photo.jpg/500px-Photo.jpg?utm_source=en.wikipedia.org&utm_campaign=parser",
+		"https://images.example.org/media/12345",
+		"data:image/png;base64,iVBORw0KGgo=",
+		"https://example.com/plain.png",
+	} {
+		standIn := protectSrc(src)
+		if !strings.HasPrefix(standIn, "https://link2epub.invalid/img/") || !strings.HasSuffix(standIn, ".png") {
+			t.Errorf("protectSrc(%q) = %q, want a link2epub.invalid URL ending in .png", src, standIn)
+		}
+		if got := restoreSrc(standIn); got != src {
+			t.Errorf("restoreSrc(protectSrc(%q)) = %q", src, got)
+		}
+	}
+	if got := restoreSrc("https://example.com/a.png"); got != "https://example.com/a.png" {
+		t.Errorf("restoreSrc changed an ordinary URL: %q", got)
+	}
+	if got := restoreSrc("https://link2epub.invalid/img/!!!.png"); got != "" {
+		t.Errorf("restoreSrc of a damaged stand-in = %q, want empty", got)
+	}
+}
+
+func TestPrepareUsesStandIns(t *testing.T) {
+	doc, err := html.Parse(strings.NewReader(`<body><img src="/a.jpg?x=1"></body>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	Prepare(doc, base)
+	var src string
+	walk(doc, func(n *html.Node) {
+		if n.DataAtom == atom.Img {
+			src = attr(n, "src")
+		}
+	})
+	if !strings.HasPrefix(src, srcStandIn) || restoreSrc(src) != "https://example.com/a.jpg?x=1" {
+		t.Errorf("src after Prepare = %q", src)
 	}
 }

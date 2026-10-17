@@ -312,6 +312,10 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wiki, err := os.ReadFile("../../testdata/pages/wiki.html")
+	if err != nil {
+		t.Fatal(err)
+	}
 	images := map[string]string{ // served path → file in testdata/images
 		"/img/press.jpg":   "press.jpg",
 		"/img/diagram.png": "diagram.png",
@@ -320,10 +324,15 @@ func TestEndToEnd(t *testing.T) {
 		"/wp-content/uploads/2026/10/upgrade-dialog-1536x864.png": "diagram.png",
 		"/wp-content/uploads/2026/10/settings-640x480.jpg":        "press.jpg",
 		"/wp-content/uploads/2026/10/hero.jpg":                    "press.jpg", // og:image, for the cover
+		// wiki.html; served whatever the query string, as Wikipedia does.
+		"/upload/a/a6/Walking_Robots_logo.png":                          "diagram.png",
+		"/thumb/9/99/Painted_miniature.jpg/500px-Painted_miniature.jpg": "press.jpg",
+		"/media/record-sheet":                                           "gradient.webp",
 	}
 	var imageRequests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/img/") || strings.HasPrefix(r.URL.Path, "/wp-content/") {
+		if strings.HasPrefix(r.URL.Path, "/img/") || strings.HasPrefix(r.URL.Path, "/wp-content/") ||
+			strings.HasPrefix(r.URL.Path, "/upload/") || strings.HasPrefix(r.URL.Path, "/thumb/") || strings.HasPrefix(r.URL.Path, "/media/") {
 			imageRequests.Add(1)
 			name, ok := images[r.URL.Path]
 			if !ok {
@@ -334,6 +343,9 @@ func TestEndToEnd(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
+		case "/wiki/Walking_Robots":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(wiki)
 		case "/news/2026/10/kde-turns-30/":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Write(lightbox)
@@ -553,6 +565,49 @@ func TestEndToEnd(t *testing.T) {
 			t.Errorf("caption appears %d times, want once", n)
 		}
 		assertCover(t, book, true) // the page's og:image, as on Ars Technica
+		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("image URLs with query strings or no extension", func(t *testing.T) {
+		// Regression test: go-trafilatura dropped images whose URL doesn't end
+		// in a file extension, such as every image on Wikipedia.
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/wiki/Walking_Robots", "-SAVE", dir)
+		if r.code != exitOK {
+			t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		if strings.Contains(r.stderr, "warning") {
+			t.Errorf("unexpected warnings: %q", r.stderr)
+		}
+		path := filepath.Join(dir, "walking-robots-game.epub")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		book.AssertWellFormed(t)
+		var stored int
+		for _, name := range book.Order {
+			if strings.HasPrefix(name, "EPUB/images/") && name != "EPUB/images/cover.jpg" {
+				stored++
+			}
+		}
+		if stored != 3 {
+			t.Errorf("book has %d images, want 3 (logo, miniature, record sheet)", stored)
+		}
+		chapter := book.File(t, "chapter.xhtml")
+		for _, want := range []string{
+			`<figcaption>The game&#39;s original logo</figcaption></figure>`,
+			`<figcaption>A painted miniature on a hex map</figcaption></figure>`,
+			`<figcaption>A machine&#39;s record sheet</figcaption></figure>`,
+		} {
+			if !strings.Contains(chapter, want) {
+				t.Errorf("chapter is missing %q", want)
+			}
+		}
+		if strings.Contains(chapter, "link2epub.invalid") {
+			t.Errorf("chapter still contains stand-in image URLs:\n%s", chapter)
+		}
 		epubtest.EPUBCheck(t, path)
 	})
 

@@ -14,6 +14,7 @@ func prepareString(t *testing.T, markup string) string {
 		t.Fatal(err)
 	}
 	Prepare(doc, base)
+	restoreImageSources(doc) // show real URLs rather than stand-ins
 	var b strings.Builder
 	body := doc.FirstChild.LastChild
 	for c := body.FirstChild; c != nil; c = c.NextSibling {

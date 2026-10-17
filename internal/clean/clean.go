@@ -51,6 +51,7 @@ var policy = func() *bluemonday.Policy {
 // title, and standalone images are wrapped in <figure>s with their
 // captions.
 func Content(n *html.Node, base *url.URL) (*html.Node, error) {
+	restoreImageSources(n)
 	var raw strings.Builder
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		if err := html.Render(&raw, c); err != nil {

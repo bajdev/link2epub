@@ -11,7 +11,6 @@ import (
 
 	trafilatura "github.com/markusmobius/go-trafilatura"
 	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
 	"golang.org/x/text/language"
 )
 
@@ -99,8 +98,10 @@ func removeLeadingTitle(content *html.Node, title string) {
 	if first == nil || first.Type != html.ElementNode {
 		return
 	}
-	switch first.DataAtom {
-	case atom.H1, atom.H2:
+	// Match on the tag name: go-trafilatura creates some output elements
+	// without setting DataAtom.
+	switch first.Data {
+	case "h1", "h2":
 		if normalize(textContent(first)) == normalize(title) {
 			content.RemoveChild(first)
 		}
