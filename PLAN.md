@@ -369,7 +369,7 @@ Converter options:
 
 Validation:
 - `epubcheck` runs on the plain EPUB before conversion.
-- KEPUBs aren't standard EPUB (Kobo's own extensions trip epubcheck warnings), so they get structural tests and checks on a real device instead.
+- In practice kepubify's output also passes epubcheck with no errors or warnings, so the KEPUB tests run epubcheck too, alongside structural tests (sentence spans, unchanged text, cover and contents kept) and checks on a real device.
 
 ---
 
