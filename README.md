@@ -65,6 +65,8 @@ build.cmd
 
 In PowerShell, run `.\build.cmd` instead. The script builds `link2epub.exe` in the repository folder, whichever folder you start it from. To update, run `git pull`, then `build.cmd` again.
 
+To try it on real articles, run `test-examples.cmd` (`.\test-examples.cmd` in PowerShell). It rebuilds `link2epub.exe`, converts a handful of sample articles into `test-examples\`, replacing books from earlier runs, and prints how many succeeded. Edit the list of URLs in the script to test other pages.
+
 ---
 
 ## Usage
