@@ -2,6 +2,9 @@ package build
 
 import (
 	"bytes"
+	"image"
+	imgpng "image/png"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +14,8 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/bajdev/link2epub/internal/assets"
+	"github.com/bajdev/link2epub/internal/clean"
 	"github.com/bajdev/link2epub/internal/epubtest"
 	"github.com/bajdev/link2epub/internal/extract"
 )
@@ -35,7 +40,15 @@ func testArticle(t *testing.T, body string) *extract.Article {
 
 func buildBytes(t *testing.T, a *extract.Article) []byte {
 	t.Helper()
-	e, err := Build(a)
+	base, err := url.Parse(a.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := clean.Content(a.Content, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := Build(a, body, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,4 +151,65 @@ func TestChapterWithoutByline(t *testing.T) {
 	if strings.Contains(chapter, "byline") {
 		t.Errorf("chapter has a byline paragraph:\n%s", chapter)
 	}
+}
+
+func TestBuildWithImages(t *testing.T) {
+	var png bytes.Buffer
+	img := image.NewGray(image.Rect(0, 0, 40, 30))
+	if err := imgpng.Encode(&png, img); err != nil {
+		t.Fatal(err)
+	}
+	a := testArticle(t, "")
+	body, err := clean.Content(a.Content, mustURL(t, a.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As left by the assets package: src is the image's filename. The second
+	// image wasn't processed and must not end up in the book.
+	frag, err := html.ParseFragment(strings.NewReader(`<figure><img src="abc123.png" alt="A chart"/></figure><p>x <img src="https://remote.example/a.png" alt=""/></p>`), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range frag {
+		body.AppendChild(n)
+	}
+
+	e, err := Build(a, body, []assets.Image{{Filename: "abc123.png", MediaType: "image/png", Data: png.Bytes()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if _, err := e.WriteTo(&buf); err != nil {
+		t.Fatal(err)
+	}
+	book := epubtest.Open(t, buf.Bytes())
+	book.AssertWellFormed(t)
+	if got := book.File(t, "images/abc123.png"); got != png.String() {
+		t.Errorf("stored image differs from the original")
+	}
+	chapter := book.File(t, "chapter.xhtml")
+	if !strings.Contains(chapter, `<img src="../images/abc123.png" alt="A chart"/>`) {
+		t.Errorf("chapter doesn't reference the stored image:\n%s", chapter)
+	}
+	if strings.Contains(chapter, "remote.example") {
+		t.Errorf("chapter references a remote image:\n%s", chapter)
+	}
+	if opf := book.File(t, ".opf"); !strings.Contains(opf, `href="images/abc123.png"`) || !strings.Contains(opf, `media-type="image/png"`) {
+		t.Errorf("OPF manifest is missing the image:\n%s", opf)
+	}
+
+	path := filepath.Join(t.TempDir(), "book.epub")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	epubtest.EPUBCheck(t, path)
+}
+
+func mustURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
 }

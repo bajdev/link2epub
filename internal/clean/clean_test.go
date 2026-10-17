@@ -22,9 +22,13 @@ func body(t *testing.T, markup string) *html.Node {
 
 func cleanString(t *testing.T, markup string) string {
 	t.Helper()
-	out, err := Content(body(t, markup), base)
+	cleaned, err := Content(body(t, markup), base)
 	if err != nil {
 		t.Fatalf("Content(%q): %v", markup, err)
+	}
+	out, err := Render(cleaned)
+	if err != nil {
+		t.Fatalf("Render(%q): %v", markup, err)
 	}
 	if err := WellFormed("<div>" + out + "</div>"); err != nil {
 		t.Fatalf("Content(%q) = %q, not well-formed: %v", markup, out, err)
@@ -69,9 +73,12 @@ func TestContentSanitizes(t *testing.T) {
 		{"keeps valid lang and dir, drops invalid",
 			`<p lang="fr" dir="rtl">a</p><p lang="not valid!" dir="sideways">b</p>`,
 			`<p lang="fr" dir="rtl">a</p><p>b</p>`},
-		{"removes images until they are supported",
-			`<p>a</p><p><img src="/x.png" alt="x"></p>`,
-			`<p>a</p>`},
+		{"keeps images in paragraphs and makes their src absolute",
+			`<p>a</p><p><img src="/x.png" alt="x" class="big" onerror="evil()"></p>`,
+			`<p>a</p><p><img src="https://example.com/x.png" alt="x"/></p>`},
+		{"drops images with unsafe sources",
+			`<p>a <img src="javascript:evil()" alt="x"></p>`,
+			`<p>a </p>`},
 		{"removes empty paragraphs",
 			`<p>a</p><p> </p><p><br></p><p>b</p>`,
 			`<p>a</p><p>b</p>`},

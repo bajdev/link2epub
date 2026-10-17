@@ -305,7 +305,7 @@ EPUB content files must be **well-formed XHTML**, and e-readers are strict about
      - Line art, screenshots, charts and diagrams (few distinct tones) become PNG, quantized to a 16-level gray palette. That matches the panels exactly and keeps text in screenshots crisp, with no JPEG artifacts.
      - The choice is made per image by counting distinct gray levels after conversion.
   - WebP and SVG are never written into the book. Kobo's RMSDK renderer can't display WebP, and SVG support on both devices is unreliable.
-- A failed download or decode is a warning on stderr, never a fatal error. The `<img>` becomes `<p class="missing-image">[Image: alt text]</p>`.
+- A failed download or decode is a warning on stderr, never a fatal error. The `<img>` becomes `<span class="missing-image">[Image: alt text]</span>` (or is removed if it has no alt text); a `<span>` is valid everywhere an image is.
 - Files stay small: a typical article with 10 images should come out well under 5 MB. That matters for the reMarkable, which converts each EPUB on import, and for page-turn speed on the Clara HD.
 
 ### 5.5 build
@@ -389,6 +389,10 @@ Validation:
 | Long code lines | `pre-wrap`, because e-ink readers can't scroll sideways |
 | go-trafilatura quirks | Found while building M2, and worked around in `internal/clean`:<br>• It resolves relative links as if the page URL were a folder, so links are made absolute before extraction.<br>• It joins `mailto:`/`tel:` links onto the page path; these are repaired afterwards.<br>• It turns `<pre>` code blocks into `<code>`; block-level `<code>` is turned back into `<pre><code>`. |
 | Table cell spans | go-trafilatura drops `colspan`/`rowspan`, so a table that relies on them can come out with uneven rows. Known limitation in v1 |
+| Images in zoom links | go-trafilatura drops an image wrapped in a link (such as a "click to zoom" lightbox link) when it sits in a `<div>` or `<p>`. WordPress themes, including Ars Technica's, do this for every image. `Prepare` unwraps links that contain only an image |
+| Figure captions | go-trafilatura drops `<figcaption>`. `Prepare` turns each caption into an italic paragraph, which survives extraction, and `Content` rebuilds the `<figure>`. Captions laid out with `<div>`s are reduced to their text first |
+| Invented dates | go-trafilatura's default date search scans body text and can invent a date from a stray number (an image `width="2000"` became 1 January 2000). It runs in `Fast` mode, which only trusts metadata, URLs and date markup |
+| AVIF and JPEG XL images | Not decoded in v1. `<picture>` sources in those formats are skipped in favour of a JPEG, PNG, GIF or WebP alternative; a lone AVIF image is replaced by its alt text |
 | Math (MathJax/KaTeX) | Keep MathML if the page has it (EPUB 3 supports MathML). Otherwise keep the TeX source as text |
 | Right-to-left languages | Carry `lang` and `dir` through, and set the spine's `page-progression-direction` |
 | Copyright | For personal offline reading. Every book records the source URL in `dc:source` and in the chapter header |

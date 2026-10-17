@@ -117,8 +117,10 @@ func (f *Fetcher) fetchOnce(ctx context.Context, u *url.URL) (page *Page, retryA
 		return nil, -1, fmt.Errorf("%s is larger than %d MB", u, f.MaxBytes>>20)
 	}
 
+	// Sniff the content when the server sends no type or only the generic
+	// application/octet-stream, as some misconfigured servers do for HTML.
 	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
+	if mediaType, _, _ := mime.ParseMediaType(contentType); mediaType == "" || mediaType == "application/octet-stream" {
 		contentType = http.DetectContentType(body)
 	}
 	if !isHTML(contentType) {

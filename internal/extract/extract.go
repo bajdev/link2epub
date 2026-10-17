@@ -42,7 +42,12 @@ func Extract(doc *html.Node, pageURL *url.URL) (*Article, error) {
 		OriginalURL:     pageURL,
 		EnableFallback:  true,
 		IncludeLinks:    true,
+		IncludeImages:   true,
 		ExcludeComments: true,
+		// The default date search also scans body text and invents dates
+		// from stray numbers (an image width of 2000 became 1 January 2000).
+		// Fast mode only trusts metadata, URLs and date-like markup.
+		HtmlDateMode: trafilatura.Fast,
 	})
 	if err != nil || res.ContentNode == nil ||
 		utf8.RuneCountInString(strings.TrimSpace(res.ContentText)) < minTextLen {
