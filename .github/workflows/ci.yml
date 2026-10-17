@@ -57,3 +57,9 @@ jobs:
         run: go test -race ./...
       - name: Build
         run: go build ./cmd/link2epub
+      - name: Build with build.cmd
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call build.cmd || exit /b 1
+          link2epub.exe -h || exit /b 1

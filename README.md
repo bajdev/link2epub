@@ -53,6 +53,18 @@ cd link2epub
 go build -o link2epub ./cmd/link2epub
 ```
 
+### From source on Windows
+
+Install [Go](https://go.dev/dl/) 1.24 or newer, then run `build.cmd` from the repository folder:
+
+```bat
+git clone https://github.com/bajdev/link2epub.git
+cd link2epub
+build.cmd
+```
+
+In PowerShell, run `.\build.cmd` instead. The script builds `link2epub.exe` in the repository folder, whichever folder you start it from. To update, run `git pull`, then `build.cmd` again.
+
 ---
 
 ## Usage
