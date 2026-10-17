@@ -18,7 +18,7 @@ if not exist test-examples mkdir test-examples
 
 set /a ok=0, failed=0
 for %%U in (
-    "https://craphound.com/news/2026/09/27/llms-are-real-ai-is-fake/"
+    "https://pluralistic.net/2026/09/12/god-in-the-box/"
     "https://arstechnica.com/gadgets/2026/10/kde-turns-30-with-plasma-6-8-remote-upgrades-and-an-x11-farewell/"
     "https://www.bbc.com/news/articles/c5ygyww0zk3o"
     "https://en.wikipedia.org/wiki/BattleTech"
