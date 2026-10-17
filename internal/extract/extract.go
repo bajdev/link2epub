@@ -32,12 +32,16 @@ type Article struct {
 	Description string
 	Language    string // BCP 47 code, "en" when unknown
 	Published   time.Time
+	ImageURL    string     // the page's preview image, for the cover; may be empty
 	Content     *html.Node // the article body; its children are the content
 }
 
 // Extract finds the article in doc, a parsed page downloaded from pageURL.
 // It may modify doc.
 func Extract(doc *html.Node, pageURL *url.URL) (*Article, error) {
+	// Read the page's own metadata first: extraction modifies doc.
+	meta := readPageMeta(doc, pageURL)
+
 	res, err := trafilatura.ExtractDocument(doc, trafilatura.Options{
 		OriginalURL:     pageURL,
 		EnableFallback:  true,
@@ -54,19 +58,22 @@ func Extract(doc *html.Node, pageURL *url.URL) (*Article, error) {
 		return nil, ErrNoContent
 	}
 
+	// go-trafilatura's metadata comes first; the page's own declarations
+	// fill the gaps.
 	m := res.Metadata
 	a := &Article{
 		URL:         pageURL.String(),
-		Title:       strings.TrimSpace(m.Title),
-		Author:      strings.TrimSpace(m.Author),
-		SiteName:    strings.TrimSpace(m.Sitename),
-		Description: strings.TrimSpace(m.Description),
+		Title:       first(m.Title, meta.Title, pageURL.Hostname()),
+		Author:      first(m.Author, meta.Author),
+		SiteName:    first(m.Sitename, meta.SiteName),
+		Description: first(m.Description, meta.Description),
 		Language:    languageTag(m.Language),
 		Published:   m.Date,
+		ImageURL:    meta.Image,
 		Content:     res.ContentNode,
 	}
-	if a.Title == "" {
-		a.Title = pageURL.Hostname()
+	if a.Published.IsZero() {
+		a.Published = meta.Published
 	}
 	removeLeadingTitle(a.Content, a.Title)
 	return a, nil

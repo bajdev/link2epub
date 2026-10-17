@@ -40,22 +40,12 @@ type encoded struct {
 // profile, and encoded as JPEG (photos) or a 16-level PNG (line art).
 // WebP, GIF and SVG input are never passed through.
 func convert(data []byte, svg bool, p device.Profile) (*encoded, error) {
-	var img image.Image
-	var err error
-	if svg {
-		img, err = rasterizeSVG(data, p)
-	} else {
-		img, err = decode(data)
-	}
+	img, err := decodeAny(data, svg, p)
 	if err != nil {
 		return nil, err
 	}
-	b := img.Bounds()
-	if b.Dx() <= 2 || b.Dy() <= 2 {
-		return nil, errTooSmall
-	}
 
-	gray := scaleToFit(toGray(img), p.MaxImageWidth, p.MaxImageHeight)
+	gray := scaleToFit(ToGray(img), p.MaxImageWidth, p.MaxImageHeight)
 
 	var buf bytes.Buffer
 	if isLineArt(gray, p.GrayLevels) {
@@ -68,6 +58,25 @@ func convert(data []byte, svg bool, p device.Profile) (*encoded, error) {
 		return nil, err
 	}
 	return &encoded{data: buf.Bytes(), mediaType: "image/jpeg", ext: ".jpg"}, nil
+}
+
+// decodeAny decodes image data in any supported format, rasterizing SVG,
+// and rejects tracking pixels and spacers.
+func decodeAny(data []byte, svg bool, p device.Profile) (image.Image, error) {
+	var img image.Image
+	var err error
+	if svg {
+		img, err = rasterizeSVG(data, p)
+	} else {
+		img, err = decode(data)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if b := img.Bounds(); b.Dx() <= 2 || b.Dy() <= 2 {
+		return nil, errTooSmall
+	}
+	return img, nil
 }
 
 // decode decodes JPEG, PNG, GIF or WebP data, refusing images whose
@@ -114,10 +123,10 @@ func rasterizeSVG(data []byte, p device.Profile) (img image.Image, err error) {
 	return rgba, nil
 }
 
-// toGray composites img over white, so transparent areas don't turn black
+// ToGray composites img over white, so transparent areas don't turn black
 // on readers that ignore alpha, and converts it to 8-bit grayscale using
 // the BT.601 luma weights.
-func toGray(img image.Image) *image.Gray {
+func ToGray(img image.Image) *image.Gray {
 	b := img.Bounds()
 	flat := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 	draw.Draw(flat, flat.Bounds(), image.NewUniform(color.White), image.Point{}, draw.Src)

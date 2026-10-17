@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"mime"
 	"net/http"
@@ -119,25 +120,41 @@ func (p *Processor) Process(ctx context.Context, body *html.Node, page *url.URL)
 	return images, nil
 }
 
+// Decode fetches src (an http(s) or data: URL) and decodes it without
+// converting it, for uses such as the cover. SVG is rasterized.
+func (p *Processor) Decode(ctx context.Context, src string, page *url.URL) (image.Image, error) {
+	data, svg, err := p.fetch(ctx, src, page)
+	if err != nil {
+		return nil, err
+	}
+	return decodeAny(data, svg, p.Profile)
+}
+
 // load fetches src (an http(s) or data: URL) and converts it.
 func (p *Processor) load(ctx context.Context, src string, page *url.URL) (*encoded, error) {
-	var data []byte
+	data, svg, err := p.fetch(ctx, src, page)
+	if err != nil {
+		return nil, err
+	}
+	return convert(data, svg, p.Profile)
+}
+
+// fetch returns the bytes of src and whether they are SVG.
+func (p *Processor) fetch(ctx context.Context, src string, page *url.URL) (data []byte, svg bool, err error) {
 	var mediaType string
 	if strings.HasPrefix(src, "data:") {
 		du, err := dataurl.DecodeString(src)
 		if err != nil {
-			return nil, fmt.Errorf("bad data URL: %w", err)
+			return nil, false, fmt.Errorf("bad data URL: %w", err)
 		}
 		data, mediaType = du.Data, du.ContentType()
 	} else {
-		var err error
 		data, mediaType, err = p.download(ctx, src, page)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	svg := mediaType == "image/svg+xml" || looksLikeSVG(data)
-	return convert(data, svg, p.Profile)
+	return data, mediaType == "image/svg+xml" || looksLikeSVG(data), nil
 }
 
 // download fetches an image, sending the article as Referer because some
