@@ -389,7 +389,8 @@ Validation:
 | Long code lines | `pre-wrap`, because e-ink readers can't scroll sideways |
 | go-trafilatura quirks | Found while building M2, and worked around in `internal/clean`:<br>• It resolves relative links as if the page URL were a folder, so links are made absolute before extraction.<br>• It joins `mailto:`/`tel:` links onto the page path; these are repaired afterwards.<br>• It turns `<pre>` code blocks into `<code>`; block-level `<code>` is turned back into `<pre><code>`. |
 | Table cell spans | go-trafilatura drops `colspan`/`rowspan`, so a table that relies on them can come out with uneven rows. Known limitation in v1 |
-| Figure captions | go-trafilatura drops `<figcaption>`. `Prepare` turns each caption into an italic paragraph, which survives extraction, and `Content` rebuilds the `<figure>` |
+| Images in zoom links | go-trafilatura drops an image wrapped in a link (such as a "click to zoom" lightbox link) when it sits in a `<div>` or `<p>`. WordPress themes, including Ars Technica's, do this for every image. `Prepare` unwraps links that contain only an image |
+| Figure captions | go-trafilatura drops `<figcaption>`. `Prepare` turns each caption into an italic paragraph, which survives extraction, and `Content` rebuilds the `<figure>`. Captions laid out with `<div>`s are reduced to their text first |
 | Invented dates | go-trafilatura's default date search scans body text and can invent a date from a stray number (an image `width="2000"` became 1 January 2000). It runs in `Fast` mode, which only trusts metadata, URLs and date markup |
 | AVIF and JPEG XL images | Not decoded in v1. `<picture>` sources in those formats are skipped in favour of a JPEG, PNG, GIF or WebP alternative; a lone AVIF image is replaced by its alt text |
 | Math (MathJax/KaTeX) | Keep MathML if the page has it (EPUB 3 supports MathML). Otherwise keep the TeX source as text |

@@ -274,14 +274,21 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lightbox, err := os.ReadFile("../../testdata/pages/lightbox.html")
+	if err != nil {
+		t.Fatal(err)
+	}
 	images := map[string]string{ // served path → file in testdata/images
 		"/img/press.jpg":   "press.jpg",
 		"/img/diagram.png": "diagram.png",
 		"/img/type.webp":   "gradient.webp",
+		// lightbox.html; srcset should select the 1536w file.
+		"/wp-content/uploads/2026/10/upgrade-dialog-1536x864.png": "diagram.png",
+		"/wp-content/uploads/2026/10/settings-640x480.jpg":        "press.jpg",
 	}
 	var imageRequests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/img/") {
+		if strings.HasPrefix(r.URL.Path, "/img/") || strings.HasPrefix(r.URL.Path, "/wp-content/") {
 			imageRequests.Add(1)
 			name, ok := images[r.URL.Path]
 			if !ok {
@@ -292,6 +299,9 @@ func TestEndToEnd(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
+		case "/news/2026/10/kde-turns-30/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(lightbox)
 		case "/essays/print-shop":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Write(essay)
@@ -443,6 +453,48 @@ func TestEndToEnd(t *testing.T) {
 		}
 		if strings.Contains(chapter, "tracker.example") || strings.Contains(chapter, `<img src="http`) {
 			t.Errorf("chapter references remote images:\n%s", chapter)
+		}
+		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("images inside lightbox zoom links", func(t *testing.T) {
+		// Regression test: go-trafilatura dropped every image on pages that
+		// wrap images in zoom links, such as Ars Technica articles.
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/news/2026/10/kde-turns-30/", "-SAVE", dir)
+		if r.code != exitOK {
+			t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		if strings.Contains(r.stderr, "warning") {
+			t.Errorf("unexpected warnings: %q", r.stderr)
+		}
+		path := filepath.Join(dir, "kde-turns-30-with-plasma-6-8.epub")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		book.AssertWellFormed(t)
+		var stored int
+		for _, name := range book.Order {
+			if strings.HasPrefix(name, "EPUB/images/") {
+				stored++
+			}
+		}
+		if stored != 2 {
+			t.Errorf("book has %d images, want 2", stored)
+		}
+		chapter := book.File(t, "chapter.xhtml")
+		for _, want := range []string{
+			`<figcaption>The new remote upgrade dialog. Credit: KDE</figcaption></figure>`,
+			`alt="System Settings in Plasma 6.8"/><figcaption>System Settings has been reorganised.</figcaption></figure>`,
+		} {
+			if !strings.Contains(chapter, want) {
+				t.Errorf("chapter is missing %q", want)
+			}
+		}
+		if n := strings.Count(chapter, "The new remote upgrade dialog."); n != 1 {
+			t.Errorf("caption appears %d times, want once", n)
 		}
 		epubtest.EPUBCheck(t, path)
 	})

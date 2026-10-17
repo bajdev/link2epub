@@ -23,12 +23,20 @@ var lazySrcsetAttrs = []string{"data-srcset", "data-lazy-srcset"}
 //   - lazy-loading attributes and the best srcset or <picture> candidate
 //     are moved into src, and src is made absolute;
 //   - tracking pixels (width or height of 2 or less) are removed;
+//   - links that wrap nothing but an image, such as "click to zoom"
+//     lightbox links, are unwrapped: go-trafilatura drops an image inside
+//     such a link when it sits in a <div> or <p>, as on Ars Technica and
+//     many WordPress sites, and the link is useless on an e-reader;
 //   - each <figcaption> becomes an italic paragraph, which go-trafilatura
 //     keeps (it drops captions); Content turns it back into a caption.
 func prepareImages(doc *html.Node, base *url.URL) {
-	var imgs, captions, pixels []*html.Node
+	var imgs, captions, pixels, imageLinks []*html.Node
 	walk(doc, func(n *html.Node) {
 		switch n.DataAtom {
+		case atom.A:
+			if contains(n, atom.Img) && strings.TrimSpace(text(n)) == "" {
+				imageLinks = append(imageLinks, n)
+			}
 		case atom.Img:
 			if isTrackingPixel(n) {
 				pixels = append(pixels, n)
@@ -42,6 +50,9 @@ func prepareImages(doc *html.Node, base *url.URL) {
 	for _, n := range pixels {
 		n.Parent.RemoveChild(n)
 	}
+	for _, a := range imageLinks {
+		unwrap(a)
+	}
 	for _, n := range imgs {
 		if src := bestSource(n); src != "" {
 			if u, err := base.Parse(src); err == nil {
@@ -52,9 +63,19 @@ func prepareImages(doc *html.Node, base *url.URL) {
 	for _, c := range captions {
 		// <figcaption>x</figcaption> → <p><i>x</i></p>
 		i := &html.Node{Type: html.ElementNode, Data: "i", DataAtom: atom.I}
-		for child := c.FirstChild; child != nil; child = c.FirstChild {
-			c.RemoveChild(child)
-			i.AppendChild(child)
+		if hasBlock(c) {
+			// A paragraph can't hold blocks, so captions laid out with
+			// <div>s (as on Ars Technica) are reduced to their text.
+			caption := spacedText(c)
+			for child := c.FirstChild; child != nil; child = c.FirstChild {
+				c.RemoveChild(child)
+			}
+			i.AppendChild(&html.Node{Type: html.TextNode, Data: caption})
+		} else {
+			for child := c.FirstChild; child != nil; child = c.FirstChild {
+				c.RemoveChild(child)
+				i.AppendChild(child)
+			}
 		}
 		c.Data, c.DataAtom, c.Attr = "p", atom.P, nil
 		c.AppendChild(i)
@@ -259,6 +280,54 @@ func firstElement(n *html.Node) *html.Node {
 		}
 	}
 	return nil
+}
+
+// hasBlock reports whether n contains block-level elements.
+func hasBlock(n *html.Node) bool {
+	found := false
+	walk(n, func(d *html.Node) {
+		switch d.DataAtom {
+		case atom.Div, atom.P, atom.Ul, atom.Ol, atom.Table, atom.Blockquote, atom.Section, atom.Figure:
+			found = found || d != n
+		}
+	})
+	return found
+}
+
+// spacedText returns the text of n with a space at every element boundary
+// and whitespace collapsed, so "dialog.<span>Credit: KDE</span>" reads
+// "dialog. Credit: KDE".
+func spacedText(n *html.Node) string {
+	var b strings.Builder
+	var rec func(*html.Node)
+	rec = func(n *html.Node) {
+		switch n.Type {
+		case html.TextNode:
+			b.WriteString(n.Data)
+		case html.ElementNode:
+			b.WriteByte(' ')
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			rec(c)
+		}
+		if n.Type == html.ElementNode {
+			b.WriteByte(' ')
+		}
+	}
+	rec(n)
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// unwrap replaces n with its children.
+func unwrap(n *html.Node) {
+	if n.Parent == nil {
+		return
+	}
+	for c := n.FirstChild; c != nil; c = n.FirstChild {
+		n.RemoveChild(c)
+		n.Parent.InsertBefore(c, n)
+	}
+	n.Parent.RemoveChild(n)
 }
 
 func setAttr(n *html.Node, key, val string) {
