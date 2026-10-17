@@ -2,11 +2,13 @@
 package build
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/base64"
 	"fmt"
 	"html/template"
 	"strings"
+	"time"
 
 	epub "github.com/go-shiori/go-epub"
 	"github.com/google/uuid"
@@ -26,10 +28,19 @@ var styleCSS []byte
 
 var chapter = template.Must(template.New("chapter").Parse(chapterTmpl))
 
+// DisplayDate formats a publication date as shown in the byline and on the
+// cover, or returns "" for the zero time.
+func DisplayDate(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("2 January 2006")
+}
+
 // Build returns the EPUB for a, whose cleaned content is body (from
-// clean.Content) with images already processed into images. The result's
-// WriteTo writes the book.
-func Build(a *extract.Article, body *html.Node, images []assets.Image) (*epub.Epub, error) {
+// clean.Content) with images already processed into images. cover is a
+// JPEG cover image, or nil for none.
+func Build(a *extract.Article, body *html.Node, images []assets.Image, cover []byte) ([]byte, error) {
 	// go-epub stages files in a temporary folder that it removes after each
 	// write. Don't switch it to epub.MemoryFS: on Windows that loses every
 	// file except mimetype, producing an empty book.
@@ -39,7 +50,8 @@ func Build(a *extract.Article, body *html.Node, images []assets.Image) (*epub.Ep
 	}
 	// Derive the identifier from the URL, so rebuilding the same page gives
 	// the same book identity and readers treat it as the same book.
-	e.SetIdentifier("urn:uuid:" + uuid.NewSHA1(uuid.NameSpaceURL, []byte(a.URL)).String())
+	id := "urn:uuid:" + uuid.NewSHA1(uuid.NameSpaceURL, []byte(a.URL)).String()
+	e.SetIdentifier(id)
 	e.SetLang(a.Language)
 	if a.Author != "" {
 		e.SetAuthor(a.Author)
@@ -52,17 +64,32 @@ func Build(a *extract.Article, body *html.Node, images []assets.Image) (*epub.Ep
 	if err != nil {
 		return nil, fmt.Errorf("adding stylesheet: %w", err)
 	}
+	if cover != nil {
+		p, err := e.AddImage("data:image/jpeg;base64,"+base64.StdEncoding.EncodeToString(cover), "cover.jpg")
+		if err != nil {
+			return nil, fmt.Errorf("adding cover: %w", err)
+		}
+		if err := e.SetCover(p, ""); err != nil {
+			return nil, fmt.Errorf("adding cover: %w", err)
+		}
+	}
 	if err := addImages(e, body, images); err != nil {
 		return nil, err
 	}
+	headings := anchorHeadings(body)
 	chapter, err := chapterBody(a, body)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := e.AddSection(chapter, a.Title, "chapter.xhtml", css); err != nil {
+	if _, err := e.AddSection(chapter, a.Title, chapterFile, css); err != nil {
 		return nil, err
 	}
-	return e, nil
+
+	var raw bytes.Buffer
+	if _, err := e.WriteTo(&raw); err != nil {
+		return nil, err
+	}
+	return finish(raw.Bytes(), id, a, headings)
 }
 
 // addImages stores each image in the book and points the <img> elements,
@@ -138,8 +165,8 @@ func byline(a *extract.Article) string {
 	if a.SiteName != "" {
 		parts = append(parts, a.SiteName)
 	}
-	if !a.Published.IsZero() {
-		parts = append(parts, a.Published.Format("2 January 2006"))
+	if d := DisplayDate(a.Published); d != "" {
+		parts = append(parts, d)
 	}
 	return strings.Join(parts, " · ")
 }

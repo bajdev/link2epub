@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"image"
-	_ "image/jpeg"
+	"image/jpeg"
 	_ "image/png"
 	"net/http"
 	"net/http/httptest"
@@ -231,6 +231,40 @@ func TestKEPUBNotImplemented(t *testing.T) {
 	assertEmptyDir(t, dir)
 }
 
+// assertCover checks the book has a 1404x1872 grayscale cover, listed
+// first in the spine. With photo, the cover's upper half must show the
+// photo (mid-grays) rather than the plain cover's black band and white
+// space.
+func assertCover(t *testing.T, book *epubtest.Book, photo bool) {
+	t.Helper()
+	opf := book.File(t, ".opf")
+	if !strings.Contains(opf, `href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"`) {
+		t.Fatalf("OPF has no cover image:\n%s", opf)
+	}
+	if strings.Index(opf, `<itemref idref="cover.xhtml">`) > strings.Index(opf, `<itemref idref="chapter.xhtml">`) {
+		t.Errorf("cover isn't first in the spine:\n%s", opf)
+	}
+	img, err := jpeg.Decode(strings.NewReader(book.Files["EPUB/images/cover.jpg"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gray, ok := img.(*image.Gray)
+	if !ok || gray.Bounds().Dx() != 1404 || gray.Bounds().Dy() != 1872 {
+		t.Fatalf("cover is %T %v, want 1404x1872 grayscale", img, img.Bounds())
+	}
+	mid := 0
+	for y := 300; y < 900; y += 10 {
+		for x := 0; x < 1404; x += 10 {
+			if v := gray.GrayAt(x, y).Y; v > 40 && v < 215 {
+				mid++
+			}
+		}
+	}
+	if hasPhoto := mid > 2000; hasPhoto != photo {
+		t.Errorf("cover photo = %v (%d mid-gray samples), want %v", hasPhoto, mid, photo)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -278,6 +312,10 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wiki, err := os.ReadFile("../../testdata/pages/wiki.html")
+	if err != nil {
+		t.Fatal(err)
+	}
 	images := map[string]string{ // served path → file in testdata/images
 		"/img/press.jpg":   "press.jpg",
 		"/img/diagram.png": "diagram.png",
@@ -285,10 +323,16 @@ func TestEndToEnd(t *testing.T) {
 		// lightbox.html; srcset should select the 1536w file.
 		"/wp-content/uploads/2026/10/upgrade-dialog-1536x864.png": "diagram.png",
 		"/wp-content/uploads/2026/10/settings-640x480.jpg":        "press.jpg",
+		"/wp-content/uploads/2026/10/hero.jpg":                    "press.jpg", // og:image, for the cover
+		// wiki.html; served whatever the query string, as Wikipedia does.
+		"/upload/a/a6/Walking_Robots_logo.png":                          "diagram.png",
+		"/thumb/9/99/Painted_miniature.jpg/500px-Painted_miniature.jpg": "press.jpg",
+		"/media/record-sheet":                                           "gradient.webp",
 	}
 	var imageRequests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/img/") || strings.HasPrefix(r.URL.Path, "/wp-content/") {
+		if strings.HasPrefix(r.URL.Path, "/img/") || strings.HasPrefix(r.URL.Path, "/wp-content/") ||
+			strings.HasPrefix(r.URL.Path, "/upload/") || strings.HasPrefix(r.URL.Path, "/thumb/") || strings.HasPrefix(r.URL.Path, "/media/") {
 			imageRequests.Add(1)
 			name, ok := images[r.URL.Path]
 			if !ok {
@@ -299,6 +343,9 @@ func TestEndToEnd(t *testing.T) {
 			return
 		}
 		switch r.URL.Path {
+		case "/wiki/Walking_Robots":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(wiki)
 		case "/news/2026/10/kde-turns-30/":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.Write(lightbox)
@@ -356,6 +403,7 @@ func TestEndToEnd(t *testing.T) {
 		if strings.Contains(chapter, "Great article, thanks!") {
 			t.Errorf("chapter contains page comments")
 		}
+		assertCover(t, book, false)
 		epubtest.EPUBCheck(t, path)
 	})
 
@@ -375,8 +423,8 @@ func TestEndToEnd(t *testing.T) {
 		chapter := book.File(t, "chapter.xhtml")
 		for _, want := range []string{
 			`<div lang="en" xml:lang="en">`,
-			"<h2>File location</h2>",
-			"<h3>Durations</h3>",
+			`<h2 id="sec-1">File location</h2>`,
+			`<h3 id="sec-3">Durations</h3>`,
 			"<pre><code>interval = ",
 			"<td><code>wifi_only</code></td>",
 			`<a href="mailto:docs@example.com">`,
@@ -391,6 +439,21 @@ func TestEndToEnd(t *testing.T) {
 			if strings.Contains(chapter, unwanted) {
 				t.Errorf("chapter contains %q", unwanted)
 			}
+		}
+		assertCover(t, book, false)
+		squash := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+		nav := squash(book.File(t, "nav.xhtml"))
+		for _, want := range []string{
+			`<a href="xhtml/chapter.xhtml#sec-1">File location</a>`,
+			`<a href="xhtml/chapter.xhtml#sec-2">Options</a> <ol> <li><a href="xhtml/chapter.xhtml#sec-3">Durations</a></li> </ol>`,
+			`<a href="xhtml/chapter.xhtml#sec-4">Example</a>`,
+		} {
+			if !strings.Contains(nav, want) {
+				t.Errorf("nav is missing %q:\n%s", want, nav)
+			}
+		}
+		if strings.Contains(nav, "Edge cases") {
+			t.Errorf("nav lists an <h4>; only sections and subsections belong in it")
 		}
 		epubtest.EPUBCheck(t, path)
 	})
@@ -414,7 +477,7 @@ func TestEndToEnd(t *testing.T) {
 
 		var stored []string
 		for _, name := range book.Order {
-			if strings.HasPrefix(name, "EPUB/images/") {
+			if strings.HasPrefix(name, "EPUB/images/") && name != "EPUB/images/cover.jpg" {
 				stored = append(stored, name)
 			}
 		}
@@ -454,6 +517,11 @@ func TestEndToEnd(t *testing.T) {
 		if strings.Contains(chapter, "tracker.example") || strings.Contains(chapter, `<img src="http`) {
 			t.Errorf("chapter references remote images:\n%s", chapter)
 		}
+		assertCover(t, book, true)
+		if opf := book.File(t, ".opf"); !strings.Contains(opf, "<dc:publisher>Letterpress Weekly</dc:publisher>") ||
+			!strings.Contains(opf, "<dc:source>"+srv.URL+"/essays/print-shop</dc:source>") {
+			t.Errorf("OPF is missing the publisher or source:\n%s", opf)
+		}
 		epubtest.EPUBCheck(t, path)
 	})
 
@@ -477,7 +545,7 @@ func TestEndToEnd(t *testing.T) {
 		book.AssertWellFormed(t)
 		var stored int
 		for _, name := range book.Order {
-			if strings.HasPrefix(name, "EPUB/images/") {
+			if strings.HasPrefix(name, "EPUB/images/") && name != "EPUB/images/cover.jpg" {
 				stored++
 			}
 		}
@@ -495,6 +563,50 @@ func TestEndToEnd(t *testing.T) {
 		}
 		if n := strings.Count(chapter, "The new remote upgrade dialog."); n != 1 {
 			t.Errorf("caption appears %d times, want once", n)
+		}
+		assertCover(t, book, true) // the page's og:image, as on Ars Technica
+		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("image URLs with query strings or no extension", func(t *testing.T) {
+		// Regression test: go-trafilatura dropped images whose URL doesn't end
+		// in a file extension, such as every image on Wikipedia.
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/wiki/Walking_Robots", "-SAVE", dir)
+		if r.code != exitOK {
+			t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		if strings.Contains(r.stderr, "warning") {
+			t.Errorf("unexpected warnings: %q", r.stderr)
+		}
+		path := filepath.Join(dir, "walking-robots-game.epub")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		book.AssertWellFormed(t)
+		var stored int
+		for _, name := range book.Order {
+			if strings.HasPrefix(name, "EPUB/images/") && name != "EPUB/images/cover.jpg" {
+				stored++
+			}
+		}
+		if stored != 3 {
+			t.Errorf("book has %d images, want 3 (logo, miniature, record sheet)", stored)
+		}
+		chapter := book.File(t, "chapter.xhtml")
+		for _, want := range []string{
+			`<figcaption>The game&#39;s original logo</figcaption></figure>`,
+			`<figcaption>A painted miniature on a hex map</figcaption></figure>`,
+			`<figcaption>A machine&#39;s record sheet</figcaption></figure>`,
+		} {
+			if !strings.Contains(chapter, want) {
+				t.Errorf("chapter is missing %q", want)
+			}
+		}
+		if strings.Contains(chapter, "link2epub.invalid") {
+			t.Errorf("chapter still contains stand-in image URLs:\n%s", chapter)
 		}
 		epubtest.EPUBCheck(t, path)
 	})

@@ -1,6 +1,7 @@
 package clean
 
 import (
+	"encoding/base64"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,7 +29,10 @@ var lazySrcsetAttrs = []string{"data-srcset", "data-lazy-srcset"}
 //     such a link when it sits in a <div> or <p>, as on Ars Technica and
 //     many WordPress sites, and the link is useless on an e-reader;
 //   - each <figcaption> becomes an italic paragraph, which go-trafilatura
-//     keeps (it drops captions); Content turns it back into a caption.
+//     keeps (it drops captions); Content turns it back into a caption;
+//   - every src is replaced by a stand-in URL (see protectSrc), because
+//     go-trafilatura drops images whose URL doesn't end in an image file
+//     extension; Content restores the real URL.
 func prepareImages(doc *html.Node, base *url.URL) {
 	var imgs, captions, pixels, imageLinks []*html.Node
 	walk(doc, func(n *html.Node) {
@@ -54,11 +58,18 @@ func prepareImages(doc *html.Node, base *url.URL) {
 		unwrap(a)
 	}
 	for _, n := range imgs {
-		if src := bestSource(n); src != "" {
-			if u, err := base.Parse(src); err == nil {
-				setAttr(n, "src", u.String())
-			}
+		src := bestSource(n)
+		if src == "" {
+			continue
 		}
+		if !strings.HasPrefix(src, "data:") {
+			u, err := base.Parse(src)
+			if err != nil {
+				continue
+			}
+			src = u.String()
+		}
+		setAttr(n, "src", protectSrc(src))
 	}
 	for _, c := range captions {
 		// <figcaption>x</figcaption> → <p><i>x</i></p>
@@ -316,6 +327,49 @@ func spacedText(n *html.Node) string {
 	}
 	rec(n)
 	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// srcStandIn prefixes the stand-in URLs that carry image sources through
+// go-trafilatura. The .invalid domain is reserved and never resolves, so a
+// stand-in that somehow escaped could not reach anyone's server.
+const srcStandIn = "https://link2epub.invalid/img/"
+
+// protectSrc wraps an image URL in a stand-in ending in ".png".
+// go-trafilatura keeps an image only when filepath.Ext of its whole URL is
+// an image type, so it drops URLs with a query string
+// ("photo.jpg?utm_source=…", as on Wikipedia), extensionless CDN URLs and
+// data: URLs. The stand-in passes that check; restoreSrc undoes it.
+func protectSrc(src string) string {
+	return srcStandIn + base64.RawURLEncoding.EncodeToString([]byte(src)) + ".png"
+}
+
+// restoreSrc returns the original URL inside a stand-in made by
+// protectSrc, or src unchanged if it isn't one.
+func restoreSrc(src string) string {
+	enc, ok := strings.CutPrefix(src, srcStandIn)
+	if !ok {
+		return src
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimSuffix(enc, ".png"))
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// restoreImageSources replaces every stand-in src under n with its
+// original URL. It matches on the tag name: go-trafilatura creates its
+// output elements without setting DataAtom.
+func restoreImageSources(n *html.Node) {
+	walk(n, func(n *html.Node) {
+		if n.Data == "img" {
+			for i, a := range n.Attr {
+				if a.Key == "src" {
+					n.Attr[i].Val = restoreSrc(a.Val)
+				}
+			}
+		}
+	})
 }
 
 // unwrap replaces n with its children.

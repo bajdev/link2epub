@@ -8,7 +8,7 @@ Turn any web article into a clean EPUB for your e-ink reader.
 link2epub -URL https://example.com/some-article -SAVE ~/Books/
 ```
 
-> **Status: in development.** The tool is being built from [`PLAN.md`](PLAN.md). It already turns an article into a clean EPUB with the e-ink stylesheet and grayscale images. Covers and `-KEPUB` are still to come, so some of the behaviour below doesn't work yet. See [Roadmap](#roadmap) for progress.
+> **Status: in development.** The tool is being built from [`PLAN.md`](PLAN.md). It already turns an article into a clean EPUB with the e-ink stylesheet, grayscale images, a cover and a table of contents. `-KEPUB` is still to come, so it doesn't work yet. See [Roadmap](#roadmap) for progress.
 
 ---
 
@@ -52,6 +52,20 @@ git clone https://github.com/bajdev/link2epub.git
 cd link2epub
 go build -o link2epub ./cmd/link2epub
 ```
+
+### From source on Windows
+
+Install [Go](https://go.dev/dl/) 1.24 or newer, then run `build.cmd` from the repository folder:
+
+```bat
+git clone https://github.com/bajdev/link2epub.git
+cd link2epub
+build.cmd
+```
+
+In PowerShell, run `.\build.cmd` instead. The script builds `link2epub.exe` in the repository folder, whichever folder you start it from. To update, run `git pull`, then `build.cmd` again.
+
+To try it on real articles, run `test-examples.cmd` (`.\test-examples.cmd` in PowerShell). It rebuilds `link2epub.exe`, converts a handful of sample articles into `test-examples\`, replacing books from earlier runs, and prints how many succeeded. Edit the list of URLs in the script to test other pages.
 
 ---
 
@@ -220,7 +234,7 @@ See [`PLAN.md`](PLAN.md) for the full design.
 | M1 | Basic working version: text-only EPUB | Done |
 | M2 | Clean XHTML and the e-ink stylesheet | Done |
 | M3 | Images processed for e-ink | Done |
-| M4 | Metadata, cover and table of contents | Planned |
+| M4 | Metadata, cover and table of contents | Done |
 | M5 | `-KEPUB` for Kobo | Planned |
 | M6 | Polish and **v1 release** | Planned |
 | M7 | Direct upload to reMarkable | Post-v1 |

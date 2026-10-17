@@ -3,9 +3,11 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"net/url"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/bajdev/link2epub/internal/assets"
 	"github.com/bajdev/link2epub/internal/build"
 	"github.com/bajdev/link2epub/internal/clean"
+	"github.com/bajdev/link2epub/internal/cover"
 	"github.com/bajdev/link2epub/internal/extract"
 	"github.com/bajdev/link2epub/internal/fetch"
 )
@@ -97,9 +100,50 @@ func (p Pipeline) Run(ctx context.Context, u *url.URL, opts Options) (*Book, err
 		return nil, fmt.Errorf("processing images: %w", err)
 	}
 
-	e, err := build.Build(article, body, imgs)
+	photo, err := coverPhoto(ctx, &images, article, page.URL)
+	if err != nil {
+		return nil, fmt.Errorf("processing images: %w", err)
+	}
+	coverJPEG, err := cover.Render(cover.Details{
+		Title:    article.Title,
+		SiteName: article.SiteName,
+		Date:     build.DisplayDate(article.Published),
+	}, photo, images.Profile)
+	if err != nil {
+		return nil, fmt.Errorf("drawing the cover: %w", err)
+	}
+
+	data, err := build.Build(article, body, imgs, coverJPEG)
 	if err != nil {
 		return nil, fmt.Errorf("building the book: %w", err)
 	}
-	return &Book{Title: article.Title, Content: e}, nil
+	return &Book{Title: article.Title, Content: bytes.NewReader(data)}, nil
+}
+
+// minCoverPhoto is the smallest side, in pixels, of a preview image worth
+// putting on the cover. Smaller ones are usually site logos, and a plain
+// typographic cover looks better than a blown-up logo.
+const minCoverPhoto = 300
+
+// coverPhoto downloads the page's preview image for the cover. It returns
+// nil, and the cover is typographic, when there is no usable image; only
+// cancellation is an error.
+func coverPhoto(ctx context.Context, images *assets.Processor, a *extract.Article, page *url.URL) (image.Image, error) {
+	if a.ImageURL == "" {
+		return nil, nil
+	}
+	img, err := images.Decode(ctx, a.ImageURL, page)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+	if err != nil {
+		if images.Warn != nil {
+			images.Warn(fmt.Sprintf("cover image %s skipped, using a plain cover: %v", a.ImageURL, err))
+		}
+		return nil, nil
+	}
+	if b := img.Bounds(); min(b.Dx(), b.Dy()) < minCoverPhoto {
+		return nil, nil
+	}
+	return img, nil
 }

@@ -126,7 +126,7 @@ The project targets Go 1.24 or newer. The module path is `github.com/bajdev/link
 | SVG images | `github.com/srwiley/oksvg` + `github.com/srwiley/rasterx` | Pure-Go SVG rasterizer. SVGs are turned into grayscale PNGs, because neither target renders SVG reliably |
 | AVIF images (optional) | `github.com/gen2brain/avif` | Pure Go (WASM-based), so the binary still needs no cgo |
 | EPUB packaging | `github.com/go-shiori/go-epub` | Maintained fork of `bmaupin/go-epub`. Writes EPUB 3 with a nav document, an NCX, cover, CSS and images |
-| Cover text | `golang.org/x/image/font/opentype` + an embedded open-licensed font (e.g. Literata, SIL OFL) | Draws the title on generated covers |
+| Cover text | `golang.org/x/image/font/opentype` + the Go fonts (`golang.org/x/image/font/gofont`, BSD licence) | Draws the title on generated covers. The fonts ship inside `x/image`, so there is no font file to add |
 | KEPUB output (`-KEPUB`, §5.7) | `github.com/pgaskin/kepubify/v4/kepub` | The standard Go library for converting EPUB to Kobo's KEPUB format |
 | Book identifier | `github.com/google/uuid` | `uuid.NewSHA1` gives a stable ID for each URL |
 | Testing | `testing` + `net/http/httptest` (stdlib), `epubcheck` in CI | A real local HTTP server instead of mocks |
@@ -330,10 +330,9 @@ Uses `go-epub`:
   ```
 - Builds the **table of contents** from the article's `<h2>` and `<h3>` headings:
   - inject `id` anchors into those headings;
-  - add `AddSubSection` entries pointing to them.
-  - go-epub writes both the EPUB 3 `nav.xhtml` and an NCX for older readers.
+  - write the EPUB 3 `nav.xhtml` and the NCX ourselves, with the `<h2>` sections nested under the article and `<h3>` subsections under those. go-epub can only list whole files (its `AddSubSection` creates new files), and its NCX lacks `dtb:uid`, which Kobo's RMSDK renderer reads. The finished zip is rewritten to replace both files and to add `dc:publisher`, `dc:source` and `dc:date` to the OPF, which go-epub has no setters for.
 - The **cover** is always 1404×1872 grayscale JPEG. That is the reMarkable's exact screen size and the same 3:4 shape as the Clara HD, so it fills the screen on both devices and in their library views.
-  - With a lead image: the image is cropped to fill the top two-thirds, with the title and site name set in large black text on a white band below. Library thumbnails are tiny on e-ink, so the title must be readable at thumbnail size.
+  - With a lead image: the image is cropped to fill the top three-fifths, with the title, site name and date set in large black text on a white band below. Library thumbnails are tiny on e-ink, so the title must be readable at thumbnail size.
   - Without one: a plain typographic cover with the title, site name and date in black on white, with a thin black rule.
   - Text is drawn with `x/image/font/opentype` and the embedded font. Long titles are wrapped and shrunk to fit.
   - It is set with `SetCover`. go-epub also writes the cover page and the `cover-image` property that Kobo and reMarkable use for thumbnails.
@@ -389,6 +388,7 @@ Validation:
 | Long code lines | `pre-wrap`, because e-ink readers can't scroll sideways |
 | go-trafilatura quirks | Found while building M2, and worked around in `internal/clean`:<br>• It resolves relative links as if the page URL were a folder, so links are made absolute before extraction.<br>• It joins `mailto:`/`tel:` links onto the page path; these are repaired afterwards.<br>• It turns `<pre>` code blocks into `<code>`; block-level `<code>` is turned back into `<pre><code>`. |
 | Table cell spans | go-trafilatura drops `colspan`/`rowspan`, so a table that relies on them can come out with uneven rows. Known limitation in v1 |
+| Image URLs without a file extension | go-trafilatura keeps an image only when `filepath.Ext` of its whole URL is an image type, so it drops URLs with a query string (`photo.jpg?utm_source=…`, as on every Wikipedia image), extensionless CDN URLs and `data:` URLs. `Prepare` replaces each image URL with a stand-in (`https://link2epub.invalid/img/<encoded URL>.png`) that passes the check, and `Content` restores the original |
 | Images in zoom links | go-trafilatura drops an image wrapped in a link (such as a "click to zoom" lightbox link) when it sits in a `<div>` or `<p>`. WordPress themes, including Ars Technica's, do this for every image. `Prepare` unwraps links that contain only an image |
 | Figure captions | go-trafilatura drops `<figcaption>`. `Prepare` turns each caption into an italic paragraph, which survives extraction, and `Content` rebuilds the `<figure>`. Captions laid out with `<div>`s are reduced to their text first |
 | Invented dates | go-trafilatura's default date search scans body text and can invent a date from a stray number (an image `width="2000"` became 1 January 2000). It runs in `Fast` mode, which only trusts metadata, URLs and date markup |
