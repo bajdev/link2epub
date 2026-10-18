@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"syscall"
 )
 
 // Explain turns a failed request's error into a message a reader can act
@@ -33,7 +32,7 @@ func Explain(err error) error {
 	switch {
 	case errors.As(err, &dnsErr):
 		return &explained{fmt.Sprintf("can't find the server %s; check the address and your internet connection", dnsErr.Name), err}
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case isRefused(err):
 		return &explained{fmt.Sprintf("%s refused the connection", orServer(host)), err}
 	case errors.As(err, &certErr), errors.As(err, &unknownAuthority), errors.As(err, &hostnameErr), errors.As(err, &invalidCert):
 		return &explained{fmt.Sprintf("%s's security certificate isn't valid, so the connection isn't safe", orServer(host)), err}
