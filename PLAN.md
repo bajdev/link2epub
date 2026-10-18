@@ -402,6 +402,9 @@ Validation:
 - Everything that goes into the EPUB is sanitized, because some e-readers run JavaScript inside books.
 - Download sizes and times are capped.
 - `-SAVE` is used exactly as given. Nothing taken from the page (such as the title) can push the output outside the chosen directory, because the slug never contains path separators.
+- Only `http` and `https` URLs are fetched, for the page, its redirects, images and cover. Local files are never read: `file:` URLs and local paths in a page are refused (tests in `cmd/link2epub`, `assets` and `fetch` cover each route).
+- When `-URL` is on the internet, connections to loopback, private, link-local, carrier-grade NAT and reserved addresses are refused. The check runs on the address actually dialled, after DNS lookup, so redirects and DNS rebinding can't get around it. If `-URL` is itself local, local addresses are allowed. Configured proxies are exempt.
+- Release binaries are built with the newest Go release, and govulncheck runs on every PR, weekly and before each release.
 
 ---
 

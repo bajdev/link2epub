@@ -214,6 +214,7 @@ done < urls.txt
 | `no readable article content found` | The page has no article text link2epub can find. Usually the page builds its content with JavaScript, or it's a paywall or cookie wall. |
 | `warning: image … skipped: …` | One image couldn't be downloaded or read. The book is still made, with the image's description in its place. |
 | `warning: cover image … skipped, using a plain cover` | The page's preview image couldn't be used, so the book gets a typographic cover instead. |
+| `… is a local or private address …` | The page tried to send link2epub to your own computer or network, through a redirect or an image. That's refused for pages on the internet (see [Privacy and security](#privacy-and-security)). To convert a page on your own network, give its local address as `-URL`. |
 
 To report a problem with a particular page, include the output of `link2epub -VERSION`, the full command, everything it printed, and a saved copy of the page:
 
@@ -222,6 +223,17 @@ curl -L -A "Mozilla/5.0" -o page.html "https://example.com/the-article"
 ```
 
 (On Windows, use `curl.exe`, which comes with Windows 10 and 11.)
+
+---
+
+## Privacy and security
+
+- **Only web pages are read.** link2epub downloads the page given as `-URL`, its images and its preview image, over `http://` or `https://` only. It never reads files on your computer: `file:` links and local paths in a page are ignored, and the only file it writes is the book.
+- **Pages on the internet can't reach your network.** A web page chooses where its images come from, and can redirect. So when `-URL` is on the internet, link2epub refuses to connect to your own computer (`localhost`), your home or office network (such as `192.168.x.x` or `10.x.x.x`) and similar private addresses. If `-URL` itself is a local address, such as a wiki on your network, its local images are allowed. With a proxy set in `HTTP_PROXY` or `HTTPS_PROXY`, the proxy makes the connections, so link2epub can't check them.
+- **What sites see.** Requests look like a desktop browser and include "link2epub" in the user agent. Image requests send the article's address as the referrer, as browsers do. link2epub sends no cookies, never logs in and runs no JavaScript.
+- **Your files are safe.** Existing files are only replaced with `-FORCE`. Filenames made from article titles contain only letters, digits and dashes, so a title can't place the book outside the folder you chose.
+
+To report a security problem, see [`SECURITY.md`](SECURITY.md).
 
 ---
 
@@ -255,7 +267,7 @@ On Windows, `build.cmd` builds `link2epub.exe` and `test-examples.cmd` converts 
 ```
 cmd/link2epub/      CLI entry point (flags, exit codes, -VERSION)
 internal/pipeline/  Runs the stages below in order
-internal/fetch/     HTTP download, character-set decoding, friendly network errors
+internal/fetch/     HTTP download, local-network guard, character-set decoding, friendly network errors
 internal/extract/   Article and metadata extraction (go-trafilatura, page metadata)
 internal/clean/     Pre-extraction fixes, sanitising, XHTML conversion
 internal/assets/    Image download and e-ink processing
@@ -279,7 +291,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The Release workflow then builds everything and creates a **draft** release on GitHub. Check the files and the notes, then press **Publish release**.
+The Release workflow then builds everything with the newest Go release (so the binaries include its security fixes), runs [govulncheck](https://go.dev/doc/security/vuln/), and creates a **draft** release on GitHub. Check the files and the notes, then press **Publish release**. CI also runs govulncheck weekly, so a newly published vulnerability in Go or a dependency shows up even when nothing has changed here; when one does, make a new release.
 
 See [`PLAN.md`](PLAN.md) for the full design.
 

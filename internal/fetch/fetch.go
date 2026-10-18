@@ -55,10 +55,11 @@ type Fetcher struct {
 }
 
 // New returns a Fetcher with the defaults from PLAN.md: a 60 second
-// timeout, a 20 MB size limit and two retries.
-func New() *Fetcher {
+// timeout, a 20 MB size limit and two retries. Its client refuses local and
+// private addresses unless allowLocal is set; see IsLocal.
+func New(allowLocal bool) *Fetcher {
 	return &Fetcher{
-		Client:    &http.Client{Timeout: 60 * time.Second},
+		Client:    newClient(allowLocal),
 		UserAgent: DefaultUserAgent,
 		MaxBytes:  20 << 20,
 		Retries:   2,

@@ -14,7 +14,7 @@ import (
 
 // testFetcher returns a Fetcher with retries that don't slow tests down.
 func testFetcher() *Fetcher {
-	f := New()
+	f := New(true)
 	f.Backoff = time.Millisecond
 	return f
 }
