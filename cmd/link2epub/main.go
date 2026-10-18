@@ -1,6 +1,6 @@
 // Command link2epub converts a web article into an EPUB for e-ink readers.
 //
-//	link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
+//	link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB] [-COOKIES file]
 package main
 
 import (
@@ -9,10 +9,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 
+	"github.com/bajdev/link2epub/internal/cookies"
 	"github.com/bajdev/link2epub/internal/pipeline"
 	"github.com/bajdev/link2epub/internal/save"
 )
@@ -27,7 +29,7 @@ const (
 	exitExists    = 5 // output exists and -FORCE wasn't given
 )
 
-const usage = `Usage: link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
+const usage = `Usage: link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB] [-COOKIES file]
 
 Convert a web article into an EPUB for e-ink readers.
 
@@ -44,6 +46,10 @@ Convert a web article into an EPUB for e-ink readers.
         Overwrite the output file if it already exists.
   -KEPUB
         Write a Kobo KEPUB (.kepub.epub) instead of a plain EPUB.
+  -COOKIES file
+        Cookies exported from your browser (Netscape cookies.txt or JSON),
+        to convert pages you can read when logged in, such as articles from
+        a site you subscribe to. Keep this file private.
 `
 
 // convertFunc turns a URL into a book. It is pipeline.Run in production and
@@ -65,6 +71,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 	saveArg := fs.String("SAVE", "", "file or folder to write the book to (required)")
 	force := fs.Bool("FORCE", false, "overwrite the output file if it already exists")
 	kepub := fs.Bool("KEPUB", false, "write a Kobo KEPUB (.kepub.epub) instead of a plain EPUB")
+	cookieFile := fs.String("COOKIES", "", "cookies exported from your browser, for pages behind a login")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -103,6 +110,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 	if target.Note != "" {
 		fmt.Fprintf(stderr, "note: %s\n", target.Note)
 	}
+	warn := func(msg string) { fmt.Fprintf(stderr, "warning: %s\n", msg) }
+
+	var jar http.CookieJar
+	if *cookieFile != "" {
+		j, n, err := cookies.Load(*cookieFile)
+		if err != nil {
+			return usageError("-COOKIES %s: %v", *cookieFile, err)
+		}
+		if len(j.Cookies(pageURL)) == 0 {
+			warn(fmt.Sprintf("none of the %d cookies in %s are for %s; the page will be fetched as a logged-out visitor", n, *cookieFile, pageURL.Hostname()))
+		}
+		jar = j
+	}
 
 	// Fail before downloading anything when the filename is already known.
 	if target.Known() && !*force {
@@ -112,8 +132,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 	}
 
 	opts := pipeline.Options{
-		Warn:  func(msg string) { fmt.Fprintf(stderr, "warning: %s\n", msg) },
-		KEPUB: *kepub,
+		Warn:    warn,
+		KEPUB:   *kepub,
+		Cookies: jar,
 	}
 	if !target.Known() && !*force {
 		// For folder targets the filename comes from the title; check it

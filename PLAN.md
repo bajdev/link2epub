@@ -37,7 +37,7 @@ Both screens share a 3:4 aspect ratio, so one image size and one cover size fit 
 ### Out of scope for v1 (see §9)
 - Several URLs in one book, crawling a site, following "next page" links.
 - Pages that only show content after JavaScript runs.
-- Pages behind a login or paywall.
+- Pages behind a login or paywall. *(Since added: `-COOKIES` uses the reader's own logged-in session; see §5.8.)*
 - Uploading directly to a reMarkable. You copy the saved file over yourself; direct upload is milestone M7.
 - A web UI or hosted service.
 
@@ -48,7 +48,7 @@ Both screens share a 3:4 aspect ratio, so one image size and one cover size fit 
 The program uses Go's standard-library `flag` package. Flag names are case-sensitive: exactly `-URL`, `-SAVE`, `-FORCE` and `-KEPUB`. (`flag` also accepts `--URL` and the other double-dash forms.)
 
 ```
-Usage: link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
+Usage: link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB] [-COOKIES file]
 
   -URL string
         Web page to convert (required). Must be http:// or https://.
@@ -370,6 +370,16 @@ Converter options:
 Validation:
 - `epubcheck` runs on the plain EPUB before conversion.
 - In practice kepubify's output also passes epubcheck with no errors or warnings, so the KEPUB tests run epubcheck too, alongside structural tests (sentence spans, unchanged text, cover and contents kept) and checks on a real device.
+
+### 5.8 Pages behind a login (`-COOKIES`)
+Added after M5, before the v1 polish. The reader logs in with their browser, exports that site's cookies, and passes the file with `-COOKIES`. link2epub then fetches the page with the reader's own session. It gets exactly what their account can read, and never tries to get around a paywall (no archive mirrors, no pretending to be a search engine).
+
+- `internal/cookies` reads both common export formats:
+  - Netscape `cookies.txt` (curl, yt-dlp, "Get cookies.txt LOCALLY"), including `#HttpOnly_` lines and session cookies;
+  - the JSON array written by "Cookie-Editor" and "EditThisCookie".
+- The cookies go into a standard `net/http/cookiejar` with the public suffix list. Page and image requests share it, so each cookie goes only where a browser would send it: its own domain (and subdomains unless host-only), its path, HTTPS-only if secure, never after it expires, and not across a redirect to another site.
+- Cookie values are secrets: they are never printed, and parse errors give a line number (or JSON byte offset) instead of content.
+- A missing or malformed file is an argument error (exit code 2), reported before anything is fetched. If no cookie in the file applies to the page's host, link2epub warns that the page will be fetched logged out.
 
 ---
 

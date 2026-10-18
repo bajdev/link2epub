@@ -72,7 +72,7 @@ To try it on real articles, run `test-examples.cmd` (`.\test-examples.cmd` in Po
 ## Usage
 
 ```
-link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
+link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB] [-COOKIES file]
 ```
 
 | Flag | Required | Description |
@@ -81,6 +81,7 @@ link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
 | `-SAVE` | yes | Where to write the book: a file or a folder (see below). Missing folders are created. |
 | `-FORCE` | no | Overwrite the output file if it already exists. |
 | `-KEPUB` | no | Write a Kobo KEPUB (`.kepub.epub`) instead of a plain EPUB. |
+| `-COOKIES` | no | Cookies exported from your browser, for pages you can only read when logged in. See [Pages behind a login or paywall](#pages-behind-a-login-or-paywall). |
 
 Flag names are case-sensitive: `-URL` works, `-url` does not.
 
@@ -121,6 +122,26 @@ Kobo only uses its faster renderer for files ending in `.kepub.epub`, so `-KEPUB
 | `~/Books/a` | `~/Books/a.kepub.epub` |
 
 Passing a `.kepub.epub` path **without** `-KEPUB` is an error, because a plain EPUB with that name would display badly on a Kobo.
+
+### Pages behind a login or paywall
+
+To convert an article you can read in your browser because you're logged in, such as one from a site you subscribe to, give link2epub your browser's cookies for that site. It then downloads the page exactly as your logged-in browser would, so you get what your account can see; it doesn't get around paywalls.
+
+1. Log in to the site in your browser.
+2. Export the site's cookies with a browser extension, for example "Get cookies.txt LOCALLY" (saves a Netscape `cookies.txt`) or "Cookie-Editor" (Export → JSON, saved to a file). link2epub reads both formats.
+3. Pass the file with `-COOKIES`:
+
+   ```bat
+   link2epub.exe -URL https://news.example.com/2026/10/story -SAVE %USERPROFILE%\Books\ -COOKIES cookies.txt
+   ```
+
+Things to know:
+
+- **Keep the cookie file private.** It holds your login session: anyone with it can use your account until you log out. Delete it when you're done, or store it somewhere only you can read.
+- **Cookies only go to their own site.** Each cookie is sent only to the site it came from (and its subdomains, if the browser would), exactly as a browser does. A file with cookies for several sites is fine.
+- **Sessions expire.** If a site starts serving the logged-out version again, log in and export the cookies again.
+- If none of the file's cookies belong to the page's site, link2epub warns you, because the page will be fetched as a logged-out visitor.
+- Some sites tie a login to the browser itself, or build the article with JavaScript after the page loads. Cookies alone can't help with those.
 
 ### Output
 
@@ -189,7 +210,7 @@ done < urls.txt
 ## Limitations
 
 - **Pages that need JavaScript.** Single-page apps that only render content in the browser aren't supported in v1. link2epub detects these and exits with code `3`.
-- **Paywalls and logins.** Only content the server sends without logging in can be converted.
+- **Paywalls and logins.** Without `-COOKIES`, only what a logged-out visitor sees can be converted. With it, you get what your own account can read; link2epub never tries to get around a paywall.
 - **One URL per book.** Combining several articles into one book is a possible future feature.
 - **Colour-coded charts.** These can be harder to read after grayscale conversion. The image's caption and alt text are kept.
 

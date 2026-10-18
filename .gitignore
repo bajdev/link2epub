@@ -9,3 +9,7 @@
 
 # Books made by test-examples.cmd
 /test-examples/
+
+# Exported browser cookies (-COOKIES) hold login sessions; never commit them.
+cookies*.txt
+cookies*.json

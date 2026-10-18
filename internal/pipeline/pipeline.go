@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -49,6 +50,9 @@ type Options struct {
 	Warn func(msg string)
 	// KEPUB converts the finished book to a Kobo KEPUB.
 	KEPUB bool
+	// Cookies, if set, supplies cookies for the page and image requests,
+	// such as a logged-in session exported from the user's browser.
+	Cookies http.CookieJar
 }
 
 // Run converts the page at u into a book using the default settings.
@@ -71,6 +75,9 @@ func New() Pipeline {
 
 // Run converts the page at u into a book.
 func (p Pipeline) Run(ctx context.Context, u *url.URL, opts Options) (*Book, error) {
+	if opts.Cookies != nil {
+		p = p.withCookies(opts.Cookies)
+	}
 	page, err := p.Fetcher.Fetch(ctx, u)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrFetch, err)
@@ -126,6 +133,19 @@ func (p Pipeline) Run(ctx context.Context, u *url.URL, opts Options) (*Book, err
 		}
 	}
 	return &Book{Title: article.Title, Content: bytes.NewReader(data)}, nil
+}
+
+// withCookies returns a copy of p whose page and image requests share a
+// client using jar. The jar sends each cookie only to the sites it belongs
+// to, including across redirects.
+func (p Pipeline) withCookies(jar http.CookieJar) Pipeline {
+	client := *p.Fetcher.Client
+	client.Jar = jar
+	f := *p.Fetcher
+	f.Client = &client
+	images := *p.Images
+	images.Client = &client
+	return Pipeline{Fetcher: &f, Images: &images}
 }
 
 // minCoverPhoto is the smallest side, in pixels, of a preview image worth

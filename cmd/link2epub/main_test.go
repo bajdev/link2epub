@@ -99,6 +99,31 @@ func TestUsageErrors(t *testing.T) {
 	}
 }
 
+func TestBadCookieFiles(t *testing.T) {
+	dir := t.TempDir()
+	malformed := filepath.Join(dir, "bad.txt")
+	writeFile(t, malformed, "news.example TRUE / TRUE 0 session topsecret\n")
+	tests := []struct{ name, file, want string }{
+		{"missing file", filepath.Join(dir, "missing.txt"), "-COOKIES " + filepath.Join(dir, "missing.txt")},
+		{"malformed file", malformed, "line 1: expected 7 tab-separated fields"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			conv := &fakeConverter{title: "T"}
+			r := runCLI(t, conv, "-URL", testURL, "-SAVE", dir, "-COOKIES", tt.file)
+			if r.code != exitUsage || !strings.Contains(r.stderr, tt.want) {
+				t.Errorf("exit code = %d, stderr = %q; want %d and %q", r.code, r.stderr, exitUsage, tt.want)
+			}
+			if strings.Contains(r.stderr, "topsecret") {
+				t.Errorf("stderr reveals a cookie value: %q", r.stderr)
+			}
+			if conv.calls != 0 {
+				t.Errorf("converter called %d times, want 0", conv.calls)
+			}
+		})
+	}
+}
+
 func TestHelp(t *testing.T) {
 	r := runCLI(t, &fakeConverter{}, "-h")
 	if r.code != exitOK {
@@ -344,8 +369,35 @@ func TestEndToEnd(t *testing.T) {
 		"/thumb/9/99/Painted_miniature.jpg/500px-Painted_miniature.jpg": "press.jpg",
 		"/media/record-sheet":                                           "gradient.webp",
 	}
+	// A members-only copy of the blog post, with an image that also needs
+	// the session cookie, as on a subscription site.
+	members := strings.Replace(string(blog), "</p>\n      <h2>",
+		"</p>\n      <figure><img src=\"/members/photo.jpg\" alt=\"Members-only photo\"></figure>\n      <h2>", 1)
+	loggedIn := func(r *http.Request) bool {
+		c, err := r.Cookie("session")
+		return err == nil && c.Value == "letmein"
+	}
+	var memberImageRequests atomic.Int32
 	var imageRequests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/members/story":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			if loggedIn(r) {
+				w.Write([]byte(members))
+			} else {
+				w.Write([]byte(`<html><head><title>Members only</title></head><body><article><p>Subscribe to keep reading.</p></article></body></html>`))
+			}
+			return
+		case "/members/photo.jpg":
+			if !loggedIn(r) {
+				http.Error(w, "members only", http.StatusForbidden)
+				return
+			}
+			memberImageRequests.Add(1)
+			http.ServeFile(w, r, "../../testdata/images/press.jpg")
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/img/") || strings.HasPrefix(r.URL.Path, "/wp-content/") ||
 			strings.HasPrefix(r.URL.Path, "/upload/") || strings.HasPrefix(r.URL.Path, "/thumb/") || strings.HasPrefix(r.URL.Path, "/media/") {
 			imageRequests.Add(1)
@@ -653,6 +705,53 @@ func TestEndToEnd(t *testing.T) {
 		}
 		assertCover(t, book, true)
 		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("members-only page with cookies", func(t *testing.T) {
+		dir := t.TempDir()
+		cookieFile := filepath.Join(dir, "cookies.txt")
+		writeFile(t, cookieFile, "# Netscape HTTP Cookie File\n127.0.0.1\tFALSE\t/\tFALSE\t0\tsession\tletmein\n")
+
+		// Logged out, the page is only a teaser.
+		r := realRun("-URL", srv.URL+"/members/story", "-SAVE", dir)
+		if r.code != exitNoContent {
+			t.Errorf("without cookies: exit code = %d, want %d; stderr = %q", r.code, exitNoContent, r.stderr)
+		}
+
+		r = realRun("-URL", srv.URL+"/members/story", "-SAVE", dir, "-COOKIES", cookieFile)
+		if r.code != exitOK {
+			t.Fatalf("with cookies: exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		if strings.Contains(r.stderr, "warning") || strings.Contains(r.stderr, "letmein") {
+			t.Errorf("stderr = %q", r.stderr)
+		}
+		path := strings.TrimSpace(r.stdout)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		chapter := book.File(t, "chapter.xhtml")
+		if !strings.Contains(chapter, "Electronic paper does not shine light into your eyes.") {
+			t.Errorf("book is missing the members-only article text")
+		}
+		if !strings.Contains(chapter, `alt="Members-only photo"`) || memberImageRequests.Load() != 1 {
+			t.Errorf("members-only image missing (%d authorised requests)", memberImageRequests.Load())
+		}
+		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("cookies for another site", func(t *testing.T) {
+		dir := t.TempDir()
+		cookieFile := filepath.Join(dir, "cookies.txt")
+		writeFile(t, cookieFile, ".other.example\tTRUE\t/\tTRUE\t0\tsession\tletmein\n")
+		r := realRun("-URL", srv.URL+"/members/story", "-SAVE", dir, "-COOKIES", cookieFile)
+		if !strings.Contains(r.stderr, "warning: none of the 1 cookies in "+cookieFile+" are for 127.0.0.1") {
+			t.Errorf("stderr = %q, want a warning that no cookies apply", r.stderr)
+		}
+		if r.code != exitNoContent {
+			t.Errorf("exit code = %d, want %d", r.code, exitNoContent)
+		}
 	})
 
 	t.Run("existing file stops before images are downloaded", func(t *testing.T) {
