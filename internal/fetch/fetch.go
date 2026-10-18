@@ -33,7 +33,16 @@ type StatusError struct {
 }
 
 func (e *StatusError) Error() string {
-	return fmt.Sprintf("%s returned %d %s", e.URL, e.Code, http.StatusText(e.Code))
+	msg := fmt.Sprintf("%s returned %d %s", e.URL, e.Code, http.StatusText(e.Code))
+	switch e.Code {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		msg += "; the site may need a login or may block automated downloads"
+	case http.StatusNotFound, http.StatusGone:
+		msg += "; check the address"
+	case http.StatusTooManyRequests:
+		msg += "; the site is limiting requests, so try again later"
+	}
+	return msg
 }
 
 // Fetcher downloads pages. The zero value is not usable; call New.
@@ -97,7 +106,7 @@ func (f *Fetcher) fetchOnce(ctx context.Context, u *url.URL) (page *Page, retryA
 		if ctx.Err() != nil {
 			return nil, -1, ctx.Err()
 		}
-		return nil, 0, err
+		return nil, 0, Explain(err)
 	}
 	defer resp.Body.Close()
 
