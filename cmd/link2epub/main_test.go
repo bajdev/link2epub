@@ -26,10 +26,12 @@ type fakeConverter struct {
 	title string
 	err   error
 	calls int
+	kepub bool // the KEPUB option of the last call
 }
 
 func (f *fakeConverter) convert(ctx context.Context, u *url.URL, opts pipeline.Options) (*pipeline.Book, error) {
 	f.calls++
+	f.kepub = opts.KEPUB
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -221,14 +223,27 @@ func TestKEPUBExtensionNote(t *testing.T) {
 	}
 }
 
-func TestKEPUBNotImplemented(t *testing.T) {
-	// Until milestone M5, -KEPUB is accepted but conversion fails cleanly.
+func TestKEPUBOption(t *testing.T) {
 	dir := t.TempDir()
-	r := runCLI(t, &fakeConverter{title: "Title"}, "-URL", testURL, "-SAVE", dir, "-KEPUB")
-	if r.code != exitBuild || !strings.Contains(r.stderr, "KEPUB conversion is not implemented yet") {
-		t.Errorf("exit code = %d, stderr = %q", r.code, r.stderr)
+	for _, kepub := range []bool{false, true} {
+		conv := &fakeConverter{title: "Title"}
+		args := []string{"-URL", testURL, "-SAVE", dir, "-FORCE"}
+		want := filepath.Join(dir, "title.epub")
+		if kepub {
+			args = append(args, "-KEPUB")
+			want = filepath.Join(dir, "title.kepub.epub")
+		}
+		r := runCLI(t, conv, args...)
+		if r.code != exitOK {
+			t.Fatalf("kepub=%v: exit code = %d, stderr = %q", kepub, r.code, r.stderr)
+		}
+		if conv.kepub != kepub {
+			t.Errorf("kepub=%v: pipeline got KEPUB=%v", kepub, conv.kepub)
+		}
+		if strings.TrimSpace(r.stdout) != want {
+			t.Errorf("kepub=%v: saved to %q, want %q", kepub, r.stdout, want)
+		}
 	}
-	assertEmptyDir(t, dir)
 }
 
 // assertCover checks the book has a 1404x1872 grayscale cover, listed
@@ -608,6 +623,35 @@ func TestEndToEnd(t *testing.T) {
 		if strings.Contains(chapter, "link2epub.invalid") {
 			t.Errorf("chapter still contains stand-in image URLs:\n%s", chapter)
 		}
+		epubtest.EPUBCheck(t, path)
+	})
+
+	t.Run("KEPUB for Kobo", func(t *testing.T) {
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/essays/print-shop", "-SAVE", filepath.Join(dir, "essay.epub"), "-KEPUB")
+		if r.code != exitOK {
+			t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		if !strings.Contains(r.stderr, "note: saving as essay.kepub.epub") {
+			t.Errorf("stderr = %q, want a note about the .kepub.epub name", r.stderr)
+		}
+		path := filepath.Join(dir, "essay.kepub.epub")
+		if strings.TrimSpace(r.stdout) != path {
+			t.Errorf("stdout = %q, want %q", r.stdout, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		book.AssertWellFormed(t)
+		chapter := book.File(t, "chapter.xhtml")
+		for _, want := range []string{`class="koboSpan"`, "The print shop on Mill Street has been running since 1894.", "<figcaption>"} {
+			if !strings.Contains(chapter, want) {
+				t.Errorf("chapter is missing %q", want)
+			}
+		}
+		assertCover(t, book, true)
 		epubtest.EPUBCheck(t, path)
 	})
 

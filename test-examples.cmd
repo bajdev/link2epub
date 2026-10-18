@@ -6,7 +6,12 @@ rem
 rem Run it from Command Prompt or PowerShell:
 rem     test-examples.cmd          (Command Prompt)
 rem     .\test-examples.cmd        (PowerShell)
+rem Add "kepub" to make Kobo KEPUBs (.kepub.epub) instead of plain EPUBs:
+rem     test-examples.cmd kepub
 setlocal
+
+set KEPUB=
+if /i "%~1"=="kepub" set KEPUB=-KEPUB
 
 rem Work from the folder this script is in, wherever it was started from.
 cd /d "%~dp0"
@@ -33,7 +38,7 @@ rem Converts one URL and counts the result. The -SAVE folder is left
 rem unquoted: a quoted path ending in a backslash would swallow the quote.
 :convert
 echo === %~1
-link2epub.exe -URL "%~1" -SAVE test-examples\ -FORCE
+link2epub.exe -URL "%~1" -SAVE test-examples\ -FORCE %KEPUB%
 if errorlevel 1 (
     set /a failed+=1
 ) else (

@@ -20,6 +20,7 @@ import (
 	"github.com/bajdev/link2epub/internal/cover"
 	"github.com/bajdev/link2epub/internal/extract"
 	"github.com/bajdev/link2epub/internal/fetch"
+	"github.com/bajdev/link2epub/internal/kepub"
 )
 
 // Errors that Run wraps, so callers can choose an exit code.
@@ -46,6 +47,8 @@ type Options struct {
 	// Warn, if set, receives problems that don't stop the conversion, such
 	// as an image that couldn't be downloaded.
 	Warn func(msg string)
+	// KEPUB converts the finished book to a Kobo KEPUB.
+	KEPUB bool
 }
 
 // Run converts the page at u into a book using the default settings.
@@ -116,6 +119,11 @@ func (p Pipeline) Run(ctx context.Context, u *url.URL, opts Options) (*Book, err
 	data, err := build.Build(article, body, imgs, coverJPEG)
 	if err != nil {
 		return nil, fmt.Errorf("building the book: %w", err)
+	}
+	if opts.KEPUB {
+		if data, err = kepub.Convert(ctx, data); err != nil {
+			return nil, err
+		}
 	}
 	return &Book{Title: article.Title, Content: bytes.NewReader(data)}, nil
 }

@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/markusmobius/go-trafilatura v1.12.2
 	github.com/microcosm-cc/bluemonday v1.0.27
+	github.com/pgaskin/kepubify/v4 v4.0.4
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/vincent-petithory/dataurl v1.0.0
@@ -21,6 +22,7 @@ require (
 	github.com/andybalholm/cascadia v1.3.2 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
+	github.com/beevik/etree v1.2.0 // indirect
 	github.com/elliotchance/pie/v2 v2.9.0 // indirect
 	github.com/forPelevin/gomoji v1.2.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.3 // indirect
@@ -32,11 +34,14 @@ require (
 	github.com/hablullah/go-hijri v1.0.2 // indirect
 	github.com/hablullah/go-juliandays v1.0.0 // indirect
 	github.com/jalaali/go-jalaali v0.0.0-20210801064154-80525e88d958 // indirect
+	github.com/kr/smartypants v0.1.0 // indirect
 	github.com/markusmobius/go-dateparser v1.2.3 // indirect
 	github.com/markusmobius/go-domdistiller v0.0.0-20240926050704-25b8d046ffb4 // indirect
 	github.com/markusmobius/go-htmldate v1.9.1 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/pgaskin/kepubify/_/go116-zip.go117 v0.0.0-20210611152744-2d89b3182523 // indirect
+	github.com/pgaskin/kepubify/_/html v0.0.0-20211223234002-6ee2cc632cdc // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/zerolog v1.33.0 // indirect
 	github.com/tetratelabs/wazero v1.8.1 // indirect

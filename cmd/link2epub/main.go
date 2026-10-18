@@ -112,7 +112,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 	}
 
 	opts := pipeline.Options{
-		Warn: func(msg string) { fmt.Fprintf(stderr, "warning: %s\n", msg) },
+		Warn:  func(msg string) { fmt.Fprintf(stderr, "warning: %s\n", msg) },
+		KEPUB: *kepub,
 	}
 	if !target.Known() && !*force {
 		// For folder targets the filename comes from the title; check it
@@ -129,10 +130,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 		return fail(exitNoContent, "%v", err)
 	case err != nil:
 		return fail(exitBuild, "%v", err)
-	}
-
-	if *kepub {
-		return fail(exitBuild, "KEPUB conversion is not implemented yet (milestone M5)")
 	}
 
 	path := target.Path(book.Title)
