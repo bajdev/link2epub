@@ -1,0 +1,41 @@
+# Release builds: run by .github/workflows/release.yml when a version tag
+# (v1.0.0, v1.0.1, ...) is pushed. Check locally with:
+#   goreleaser release --snapshot --clean
+version: 2
+
+project_name: link2epub
+
+builds:
+  - id: link2epub
+    main: ./cmd/link2epub
+    binary: link2epub
+    env:
+      - CGO_ENABLED=0 # pure Go: one self-contained file per platform
+    goos: [windows, linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: link2epub
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  # Created as a draft so the binaries and notes can be checked before the
+  # release is published.
+  draft: true

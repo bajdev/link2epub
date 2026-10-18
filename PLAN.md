@@ -119,7 +119,7 @@ The project targets Go 1.24 or newer. The module path is `github.com/bajdev/link
 | CLI | `flag` (stdlib) | Matches the `-URL` / `-SAVE` / `-FORCE` style with no extra dependency |
 | HTTP | `net/http` (stdlib) | Timeouts, redirects and proxy support are built in |
 | Charset decoding | `golang.org/x/net/html/charset` | Picks the encoding from the HTTP header, then the `<meta>` tag, then detection |
-| HTML parsing / DOM work | `golang.org/x/net/html` + `github.com/PuerkitoBio/goquery` | Standard parser, plus jQuery-style selection for the cleanup passes |
+| HTML parsing / DOM work | `golang.org/x/net/html` | Standard HTML5 parser; the cleanup passes walk its node tree directly (goquery turned out to be unnecessary) |
 | Content extraction | `github.com/markusmobius/go-trafilatura` | Go port of trafilatura. Returns metadata (title, author, date, site name, language, image), and already falls back to readability and DOM-distiller internally |
 | Sanitizing | `github.com/microcosm-cc/bluemonday` | Mature allow-list HTML sanitizer |
 | Images | `image/jpeg`, `image/png`, `image/gif`, `image/color/palette` (stdlib), `golang.org/x/image/webp`, `golang.org/x/image/draw` | Decoding (WebP included), high-quality resizing, grayscale conversion and 16-level quantizing |
@@ -131,7 +131,7 @@ The project targets Go 1.24 or newer. The module path is `github.com/bajdev/link
 | Book identifier | `github.com/google/uuid` | `uuid.NewSHA1` gives a stable ID for each URL |
 | Testing | `testing` + `net/http/httptest` (stdlib), `epubcheck` in CI | A real local HTTP server instead of mocks |
 | Lint | `go vet`, `staticcheck` or `golangci-lint` | |
-| Release | `goreleaser` | Static binaries for linux, macOS and windows on amd64 and arm64 |
+| Release | `goreleaser` v2 | Static binaries for linux, macOS and windows on amd64 and arm64, with checksums; a version tag creates a draft GitHub release |
 
 The build uses no cgo (`CGO_ENABLED=0`), so `go install github.com/bajdev/link2epub/cmd/link2epub@latest` works everywhere.
 
@@ -269,7 +269,7 @@ func main() {
 - Calls `trafilatura.Extract(reader, trafilatura.Options{OriginalURL: u, IncludeImages: true, IncludeLinks: true, EnableFallback: true})`.
   - The result's `ContentNode` (an `*html.Node`) is the article body.
   - The result's `Metadata` holds the title, author, date, site name, language and image.
-- When trafilatura leaves a metadata field empty, it is filled from the page with goquery:
+- When trafilatura leaves a metadata field empty, it is filled from the page's own declarations (read before extraction, which modifies the page):
   - `og:title`, `og:site_name`, `article:author`, `article:published_time`;
   - JSON-LD `Article` / `NewsArticle` / `BlogPosting`;
   - `<title>` and `<html lang>`.
@@ -454,6 +454,14 @@ Validation:
 | M7 | *(post-v1)* Direct reMarkable upload | Upload to a USB-connected reMarkable through its web interface, then optionally to reMarkable cloud (§9) |
 
 Each milestone is a separate PR. After M1 the core job already works from end to end. M0–M6 make up v1.
+
+**Status:** M0–M6 are done. M6 added:
+- friendlier messages for common network failures (unknown host, refused connection, bad certificate, timeout) and hints on 403/404/429 responses;
+- exit code 130 for Ctrl-C;
+- a `-VERSION` flag, stamped by release builds and `build.cmd`;
+- the GoReleaser config, a tag-triggered release workflow that creates a draft release, and a test build of every release binary on each PR;
+- CI actions moved off the retiring Node 20 runtime;
+- the README rewritten for v1, with downloads, troubleshooting and releasing sections.
 
 ---
 

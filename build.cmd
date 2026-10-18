@@ -23,8 +23,13 @@ rem -s -w leave out local paths and debug symbols, making the file smaller.
 set CGO_ENABLED=0
 set GOOS=windows
 
-echo Building link2epub.exe...
-go build -trimpath -ldflags="-s -w" -o link2epub.exe .\cmd\link2epub
+rem Stamp the version from git (e.g. v1.0.0, or v1.0.0-3-gabc1234 after
+rem it) so "link2epub.exe -VERSION" says what was built.
+set VERSION=dev
+for /f "delims=" %%v in ('git describe --tags --always --dirty 2^>nul') do set VERSION=%%v
+
+echo Building link2epub.exe %VERSION%...
+go build -trimpath -ldflags="-s -w -X main.version=%VERSION%" -o link2epub.exe .\cmd\link2epub
 if errorlevel 1 (
     echo error: the build failed; see the messages above.
     exit /b 1

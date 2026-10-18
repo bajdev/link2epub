@@ -25,6 +25,10 @@ const (
 	exitNoContent = 3 // no readable content found
 	exitBuild     = 4 // book couldn't be built or written
 	exitExists    = 5 // output exists and -FORCE wasn't given
+
+	// exitInterrupted is the conventional code for a program stopped
+	// with Ctrl-C (128 + SIGINT).
+	exitInterrupted = 130
 )
 
 const usage = `Usage: link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
@@ -44,6 +48,8 @@ Convert a web article into an EPUB for e-ink readers.
         Overwrite the output file if it already exists.
   -KEPUB
         Write a Kobo KEPUB (.kepub.epub) instead of a plain EPUB.
+  -VERSION
+        Print the version and exit.
 `
 
 // convertFunc turns a URL into a book. It is pipeline.Run in production and
@@ -65,6 +71,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 	saveArg := fs.String("SAVE", "", "file or folder to write the book to (required)")
 	force := fs.Bool("FORCE", false, "overwrite the output file if it already exists")
 	kepub := fs.Bool("KEPUB", false, "write a Kobo KEPUB (.kepub.epub) instead of a plain EPUB")
+	showVersion := fs.Bool("VERSION", false, "print the version and exit")
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -83,6 +90,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 		return exitUsage
 	}
 
+	if *showVersion {
+		fmt.Fprintln(stdout, "link2epub", versionString())
+		return exitOK
+	}
 	if fs.NArg() > 0 {
 		return usageError("unexpected argument %q", fs.Arg(0))
 	}
@@ -122,6 +133,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, convert c
 	}
 	book, err := convert(ctx, pageURL, opts)
 	switch {
+	case errors.Is(err, context.Canceled):
+		return fail(exitInterrupted, "interrupted")
 	case errors.Is(err, save.ErrExists):
 		return saveFailure(fail, err)
 	case errors.Is(err, pipeline.ErrFetch):

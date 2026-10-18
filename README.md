@@ -8,8 +8,6 @@ Turn any web article into a clean EPUB for your e-ink reader.
 link2epub -URL https://example.com/some-article -SAVE ~/Books/
 ```
 
-> **Status: in development.** The tool is being built from [`PLAN.md`](PLAN.md). All v1 features work, including `-KEPUB`. What's left before the v1 release is polish (milestone M6). See [Roadmap](#roadmap) for progress.
-
 ---
 
 ## Features
@@ -33,6 +31,25 @@ link2epub -URL https://example.com/some-article -SAVE ~/Books/
 
 ## Installation
 
+### Download (recommended)
+
+Download the archive for your computer from the [Releases](https://github.com/bajdev/link2epub/releases) page:
+
+| Computer | File |
+|---|---|
+| Windows (most PCs) | `link2epub_<version>_windows_amd64.zip` |
+| Windows on Arm (e.g. Snapdragon laptops) | `link2epub_<version>_windows_arm64.zip` |
+| Mac with Apple silicon (M1 and later) | `link2epub_<version>_darwin_arm64.tar.gz` |
+| Mac with Intel | `link2epub_<version>_darwin_amd64.tar.gz` |
+| Linux | `link2epub_<version>_linux_amd64.tar.gz` (or `_arm64`) |
+
+Unpack it and put `link2epub` (`link2epub.exe` on Windows) somewhere convenient. There's nothing to install and nothing else to download. It's a command-line program, so run it from Command Prompt, PowerShell or Terminal rather than by double-clicking. `checksums.txt` on the release page lets you check the download.
+
+The binaries aren't code-signed, so the first run may show a warning:
+
+- **Windows:** SmartScreen may say "Windows protected your PC". Choose **More info → Run anyway**.
+- **macOS:** Gatekeeper may refuse to open it. Run `xattr -d com.apple.quarantine link2epub` once, in the folder where you unpacked it.
+
 ### With Go (1.24 or newer)
 
 ```bash
@@ -40,10 +57,6 @@ go install github.com/bajdev/link2epub/cmd/link2epub@latest
 ```
 
 The binary is installed into `$(go env GOPATH)/bin`. Make sure that folder is on your `PATH`.
-
-### Pre-built binaries
-
-Once v1 is released, download the binary for your platform from the [Releases](https://github.com/bajdev/link2epub/releases) page. Builds are planned for Linux, macOS and Windows on amd64 and arm64.
 
 ### From source
 
@@ -73,6 +86,7 @@ To try it on real articles, run `test-examples.cmd` (`.\test-examples.cmd` in Po
 
 ```
 link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
+link2epub -VERSION
 ```
 
 | Flag | Required | Description |
@@ -81,6 +95,7 @@ link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
 | `-SAVE` | yes | Where to write the book: a file or a folder (see below). Missing folders are created. |
 | `-FORCE` | no | Overwrite the output file if it already exists. |
 | `-KEPUB` | no | Write a Kobo KEPUB (`.kepub.epub`) instead of a plain EPUB. |
+| `-VERSION` | no | Print the version and exit. Include it when reporting a problem. |
 
 Flag names are case-sensitive: `-URL` works, `-url` does not.
 
@@ -175,6 +190,7 @@ Direct upload from link2epub is planned for a later release (see [Roadmap](#road
 | `3` | No readable article content was found on the page |
 | `4` | The book couldn't be built or written (including folder creation) |
 | `5` | The output file already exists and `-FORCE` was not given |
+| `130` | Stopped with Ctrl-C |
 
 Example in a script:
 
@@ -186,12 +202,37 @@ done < urls.txt
 
 ---
 
+## Troubleshooting
+
+| Message | What it means |
+|---|---|
+| `can't find the server …` | The address is mistyped, or the computer is offline. |
+| `… refused the connection` / `… took too long to respond` | The site is down or very slow. Try again later. |
+| `… security certificate isn't valid` | The connection can't be trusted, so link2epub won't use it. Check the address; on a work or school network, a proxy may be intercepting secure connections. |
+| `… returned 403 Forbidden; the site may need a login or may block automated downloads` | The site refused the request. Some sites block anything that isn't a full web browser. |
+| `… returned 404 Not Found; check the address` | The page doesn't exist at that address. |
+| `no readable article content found` | The page has no article text link2epub can find. Usually the page builds its content with JavaScript, or it's a paywall or cookie wall. |
+| `warning: image … skipped: …` | One image couldn't be downloaded or read. The book is still made, with the image's description in its place. |
+| `warning: cover image … skipped, using a plain cover` | The page's preview image couldn't be used, so the book gets a typographic cover instead. |
+
+To report a problem with a particular page, include the output of `link2epub -VERSION`, the full command, everything it printed, and a saved copy of the page:
+
+```bash
+curl -L -A "Mozilla/5.0" -o page.html "https://example.com/the-article"
+```
+
+(On Windows, use `curl.exe`, which comes with Windows 10 and 11.)
+
+---
+
 ## Limitations
 
 - **Pages that need JavaScript.** Single-page apps that only render content in the browser aren't supported in v1. link2epub detects these and exits with code `3`.
 - **Paywalls and logins.** Only content the server sends without logging in can be converted.
 - **One URL per book.** Combining several articles into one book is a possible future feature.
 - **Colour-coded charts.** These can be harder to read after grayscale conversion. The image's caption and alt text are kept.
+- **AVIF and JPEG XL images** aren't supported. When a page offers the image in another format too, that one is used; otherwise the image's description is shown instead.
+- **Tables that merge cells** (`colspan`/`rowspan`) may come out with uneven rows, because the extraction library drops those attributes.
 
 link2epub is meant for saving articles for your own offline reading. Every book records its source URL on the first page and in its metadata.
 
@@ -205,22 +246,40 @@ go test -race ./...           # with the race detector
 go vet ./... && staticcheck ./...
 ```
 
-The end-to-end tests check the generated books with [epubcheck](https://github.com/w3c/epubcheck), which needs Java. If `epubcheck` isn't on your `PATH`, those checks are skipped locally. They always run in CI.
+The tests also check the generated books with [epubcheck](https://github.com/w3c/epubcheck), which needs Java. Set `EPUBCHECK_JAR` to the path of `epubcheck.jar` to turn those checks on; without it they're skipped. CI always runs them, on Linux, macOS and Windows.
+
+On Windows, `build.cmd` builds `link2epub.exe` and `test-examples.cmd` converts a set of real articles into `test-examples\` for checking on the devices (see [From source on Windows](#from-source-on-windows)).
 
 ### Project layout
 
 ```
-cmd/link2epub/      CLI entry point (flags, exit codes)
-internal/fetch/     HTTP download and character-set decoding
-internal/extract/   Article and metadata extraction (go-trafilatura)
-internal/clean/     Sanitising and XHTML conversion
+cmd/link2epub/      CLI entry point (flags, exit codes, -VERSION)
+internal/pipeline/  Runs the stages below in order
+internal/fetch/     HTTP download, character-set decoding, friendly network errors
+internal/extract/   Article and metadata extraction (go-trafilatura, page metadata)
+internal/clean/     Pre-extraction fixes, sanitising, XHTML conversion
 internal/assets/    Image download and e-ink processing
+internal/cover/     Cover drawing
 internal/device/    e-ink device profile (image and cover sizes, gray levels)
-internal/build/     EPUB packaging (go-epub), cover and stylesheet
+internal/build/     EPUB packaging (go-epub), stylesheet, contents and metadata
 internal/kepub/     KEPUB conversion (kepubify)
 internal/save/      Output path rules, folder creation, -FORCE, atomic writes
-testdata/           Saved HTML pages and expected results
+internal/epubtest/  Test helpers for checking generated books
+testdata/           Saved HTML pages and images used by the tests
 ```
+
+### Releasing
+
+Releases are built by [GoReleaser](https://goreleaser.com) from `.goreleaser.yaml`: self-contained binaries for Windows, macOS and Linux on amd64 and arm64, plus checksums. Every pull request runs a test build of all of them.
+
+To make a release, tag the commit on `main` and push the tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The Release workflow then builds everything and creates a **draft** release on GitHub. Check the files and the notes, then press **Publish release**.
 
 See [`PLAN.md`](PLAN.md) for the full design.
 
@@ -236,7 +295,7 @@ See [`PLAN.md`](PLAN.md) for the full design.
 | M3 | Images processed for e-ink | Done |
 | M4 | Metadata, cover and table of contents | Done |
 | M5 | `-KEPUB` for Kobo | Done |
-| M6 | Polish and **v1 release** | Planned |
+| M6 | Polish and **v1 release** | Done |
 | M7 | Direct upload to reMarkable | Post-v1 |
 
 Possible later features: JavaScript rendering, several URLs per book, title, author and cover overrides, and profiles for colour e-ink devices.
@@ -251,7 +310,8 @@ link2epub builds on these open-source projects:
 - [go-epub](https://github.com/go-shiori/go-epub): EPUB packaging
 - [kepubify](https://github.com/pgaskin/kepubify): KEPUB conversion
 - [bluemonday](https://github.com/microcosm-cc/bluemonday): HTML sanitising
-- [goquery](https://github.com/PuerkitoBio/goquery): HTML handling
+- [oksvg](https://github.com/srwiley/oksvg): SVG rendering
+- The Go [x/image](https://pkg.go.dev/golang.org/x/image) and [x/net](https://pkg.go.dev/golang.org/x/net) packages: WebP decoding, image scaling, the Go fonts used on covers, and HTML parsing
 
 ## License
 

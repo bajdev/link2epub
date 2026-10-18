@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/bajdev/link2epub/internal/device"
+	"github.com/bajdev/link2epub/internal/fetch"
 )
 
 // Image is a processed image to add to the book.
@@ -173,7 +174,7 @@ func (p *Processor) download(ctx context.Context, src string, page *url.URL) ([]
 
 	resp, err := p.Client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fetch.Explain(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

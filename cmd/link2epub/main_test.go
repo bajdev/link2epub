@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/jpeg"
 	_ "image/png"
@@ -97,6 +98,33 @@ func TestUsageErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVersion(t *testing.T) {
+	conv := &fakeConverter{}
+	r := runCLI(t, conv, "-VERSION")
+	if r.code != exitOK || !strings.HasPrefix(r.stdout, "link2epub ") || len(strings.TrimSpace(r.stdout)) <= len("link2epub") {
+		t.Errorf("exit code = %d, stdout = %q", r.code, r.stdout)
+	}
+	if conv.calls != 0 {
+		t.Errorf("-VERSION ran a conversion")
+	}
+
+	defer func(v string) { version = v }(version)
+	version = "v1.2.3"
+	if r := runCLI(t, conv, "-VERSION"); r.stdout != "link2epub v1.2.3\n" {
+		t.Errorf("stdout = %q, want the version set at build time", r.stdout)
+	}
+}
+
+func TestInterrupted(t *testing.T) {
+	dir := t.TempDir()
+	conv := &fakeConverter{err: fmt.Errorf("%w: %w", pipeline.ErrFetch, context.Canceled)}
+	r := runCLI(t, conv, "-URL", testURL, "-SAVE", dir)
+	if r.code != exitInterrupted || strings.TrimSpace(r.stderr) != "error: interrupted" {
+		t.Errorf("exit code = %d, stderr = %q; want %d and \"error: interrupted\"", r.code, r.stderr, exitInterrupted)
+	}
+	assertEmptyDir(t, dir)
 }
 
 func TestHelp(t *testing.T) {
