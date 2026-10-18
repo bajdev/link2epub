@@ -50,7 +50,7 @@ The binaries aren't code-signed, so the first run may show a warning:
 - **Windows:** SmartScreen may say "Windows protected your PC". Choose **More info → Run anyway**.
 - **macOS:** Gatekeeper may refuse to open it. Run `xattr -d com.apple.quarantine link2epub` once, in the folder where you unpacked it.
 
-### With Go (1.24 or newer)
+### With Go (1.26 or newer)
 
 ```bash
 go install github.com/bajdev/link2epub/cmd/link2epub@latest
@@ -68,7 +68,7 @@ go build -o link2epub ./cmd/link2epub
 
 ### From source on Windows
 
-Install [Go](https://go.dev/dl/) 1.24 or newer, then run `build.cmd` from the repository folder:
+Install [Go](https://go.dev/dl/) 1.26 or newer, then run `build.cmd` from the repository folder:
 
 ```bat
 git clone https://github.com/bajdev/link2epub.git

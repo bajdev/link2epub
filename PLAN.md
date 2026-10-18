@@ -112,7 +112,7 @@ How the flags behave:
 
 ## 3. Technology choices
 
-The project targets Go 1.24 or newer. The module path is `github.com/bajdev/link2epub`.
+The project targets Go 1.26 or newer. The module path is `github.com/bajdev/link2epub`.
 
 | Concern | Package | Why |
 |---|---|---|

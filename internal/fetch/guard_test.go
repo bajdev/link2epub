@@ -108,8 +108,13 @@ func TestFetchRefusesFileRedirect(t *testing.T) {
 }
 
 func TestProxyAddrs(t *testing.T) {
-	t.Setenv("HTTP_PROXY", "http://10.0.0.2")
-	t.Setenv("HTTPS_PROXY", "proxy.lan:3128")
+	// Set both spellings: which one wins depends on the x/net version.
+	for _, name := range []string{"HTTP_PROXY", "http_proxy"} {
+		t.Setenv(name, "http://10.0.0.2")
+	}
+	for _, name := range []string{"HTTPS_PROXY", "https_proxy"} {
+		t.Setenv(name, "proxy.lan:3128")
+	}
 	got := proxyAddrs()
 	for _, want := range []string{"10.0.0.2:80", "proxy.lan:3128"} {
 		if !got[want] {
