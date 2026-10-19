@@ -1,7 +1,9 @@
 @echo off
-rem Builds link2epub.exe, then converts a set of real articles into
-rem test-examples\ for checking on the e-readers. Books from a previous run
-rem are replaced (-FORCE). A failure on one URL doesn't stop the others.
+rem Builds link2epub.exe, then converts the articles listed in
+rem test-examples.txt into test-examples\ for checking on the e-readers: one
+rem book per article, then all of them as one reading-list book. Books from
+rem a previous run are replaced (-FORCE). A failure on one URL doesn't stop
+rem the others.
 rem
 rem Run it from Command Prompt or PowerShell:
 rem     test-examples.cmd          (Command Prompt)
@@ -22,15 +24,19 @@ echo.
 if not exist test-examples mkdir test-examples
 
 set /a ok=0, failed=0
-for %%U in (
-    "https://pluralistic.net/2026/09/12/god-in-the-box/"
-    "https://arstechnica.com/gadgets/2026/10/kde-turns-30-with-plasma-6-8-remote-upgrades-and-an-x11-farewell/"
-    "https://www.bbc.com/news/articles/c5ygyww0zk3o"
-    "https://en.wikipedia.org/wiki/BattleTech"
-    "https://www.wired.com/story/breadfruit-caribbean-pacific-climate-change-super-food/"
-) do call :convert %%U
+for /f "usebackq eol=# delims=" %%U in ("test-examples.txt") do call :convert "%%U"
 
-echo %ok% converted, %failed% failed. Books are in %CD%\test-examples\
+rem All five again, as one reading-list book.
+echo === Reading list of all five
+link2epub.exe -URLS test-examples.txt -TITLE "link2epub test examples" -SAVE test-examples\ -FORCE %KEPUB%
+if errorlevel 1 (
+    set /a failed+=1
+) else (
+    set /a ok+=1
+)
+echo.
+
+echo %ok% books made, %failed% failed. Books are in %CD%\test-examples\
 if %failed% gtr 0 exit /b 1
 exit /b 0
 

@@ -135,15 +135,63 @@ func TestFitTitle(t *testing.T) {
 }
 
 func TestSubtitle(t *testing.T) {
-	tests := map[Details]string{
-		{SiteName: "Site", Date: "1 May 2025"}: "Site · 1 May 2025",
-		{SiteName: "Site"}:                     "Site",
-		{Date: "1 May 2025"}:                   "1 May 2025",
-		{}:                                     "",
+	tests := []struct {
+		d    Details
+		want string
+	}{
+		{Details{SiteName: "Site", Date: "1 May 2025"}, "Site · 1 May 2025"},
+		{Details{SiteName: "Site"}, "Site"},
+		{Details{Date: "1 May 2025"}, "1 May 2025"},
+		{Details{}, ""},
 	}
-	for d, want := range tests {
-		if got := subtitle(d); got != want {
-			t.Errorf("subtitle(%+v) = %q, want %q", d, got, want)
+	for _, tt := range tests {
+		if got := subtitle(tt.d); got != tt.want {
+			t.Errorf("subtitle(%+v) = %q, want %q", tt.d, got, tt.want)
 		}
+	}
+}
+
+func TestContentsCover(t *testing.T) {
+	titles := []string{"How e-ink works", "A history of the printing press", "Why paper still matters"}
+	data, err := Render(Details{Title: "Weekend reading", Contents: titles}, nil, device.EInk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := decode(t, data)
+	if s := darkShare(img, image.Rect(0, 0, 1404, 150)); s < 0.8 {
+		t.Errorf("top band is %.0f%% dark, want a black band", s*100)
+	}
+	if s := darkShare(img, image.Rect(100, 300, 1300, 500)); s < 0.05 {
+		t.Errorf("title area is %.1f%% dark, want visible text", s*100)
+	}
+	if s := darkShare(img, image.Rect(100, 700, 1300, 1100)); s < 0.01 {
+		t.Errorf("contents area is %.1f%% dark, want the article titles", s*100)
+	}
+
+	// A long list stays within the margins.
+	many := make([]string, 50)
+	for i := range many {
+		many[i] = strings.Repeat("A long article title ", 5)
+	}
+	data, err = Render(Details{Title: strings.Repeat("Long book title ", 10), Contents: many}, nil, device.EInk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := darkShare(decode(t, data), image.Rect(0, 1790, 1404, 1872)); s > 0.01 {
+		t.Errorf("bottom margin is %.1f%% dark, want the list to stop above it", s*100)
+	}
+}
+
+func TestFitContents(t *testing.T) {
+	titles := []string{"a", "b", "c", "d", "e"}
+	if got := fitContents(titles, 5); len(got) != 5 {
+		t.Errorf("fitContents(5 titles, 5) = %q, want all of them", got)
+	}
+	got := fitContents(titles, 3)
+	if want := []string{"a", "b", "and 3 more"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("fitContents(5 titles, 3) = %q, want %q", got, want)
+	}
+	if titles[2] != "c" {
+		t.Errorf("fitContents changed its input: %q", titles)
 	}
 }

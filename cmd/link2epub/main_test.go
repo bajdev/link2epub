@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -16,9 +17,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bajdev/link2epub/internal/epubtest"
 	"github.com/bajdev/link2epub/internal/pipeline"
+	"github.com/bajdev/link2epub/internal/save"
 )
 
 // fakeConverter returns a fixed book and counts how often it was called, so
@@ -27,21 +30,30 @@ type fakeConverter struct {
 	title string
 	err   error
 	calls int
-	kepub bool // the KEPUB option of the last call
+	// The arguments of the last call.
+	urls  []string
+	opts  pipeline.Options
+	kepub bool
 }
 
-func (f *fakeConverter) convert(ctx context.Context, u *url.URL, opts pipeline.Options) (*pipeline.Book, error) {
+func (f *fakeConverter) convert(ctx context.Context, urls []*url.URL, opts pipeline.Options) (*pipeline.Book, error) {
 	f.calls++
 	f.kepub = opts.KEPUB
+	f.opts = opts
+	f.urls = nil
+	for _, u := range urls {
+		f.urls = append(f.urls, u.String())
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
+	title := cmp.Or(opts.Title, f.title)
 	if opts.BeforeImages != nil {
-		if err := opts.BeforeImages(f.title); err != nil {
+		if err := opts.BeforeImages(title); err != nil {
 			return nil, err
 		}
 	}
-	return &pipeline.Book{Title: f.title, Content: strings.NewReader("epub:" + f.title)}, nil
+	return &pipeline.Book{Title: title, Content: strings.NewReader("epub:" + title)}, nil
 }
 
 type result struct {
@@ -52,7 +64,7 @@ type result struct {
 func runCLI(t *testing.T, conv *fakeConverter, args ...string) result {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), args, &stdout, &stderr, conv.convert)
+	code := run(context.Background(), args, strings.NewReader(""), &stdout, &stderr, conv.convert)
 	return result{code, stdout.String(), stderr.String()}
 }
 
@@ -66,9 +78,9 @@ func TestUsageErrors(t *testing.T) {
 		args []string
 		want string // expected in stderr
 	}{
-		{"no arguments", nil, "-URL is required"},
+		{"no arguments", nil, "-URL or -URLS is required"},
 		{"missing -SAVE", []string{"-URL", testURL}, "-SAVE is required"},
-		{"missing -URL", []string{"-SAVE", out}, "-URL is required"},
+		{"missing -URL", []string{"-SAVE", out}, "-URL or -URLS is required"},
 		{"lowercase flag", []string{"-url", testURL, "-SAVE", out}, "flag provided but not defined: -url"},
 		{"extra argument", []string{"-URL", testURL, "-SAVE", out, "extra"}, `unexpected argument "extra"`},
 		{"ftp URL", []string{"-URL", "ftp://example.com/a", "-SAVE", out}, "must start with http:// or https://"},
@@ -416,7 +428,7 @@ func TestEndToEnd(t *testing.T) {
 
 	realRun := func(args ...string) result {
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), args, &stdout, &stderr, pipeline.Run)
+		code := run(context.Background(), args, strings.NewReader(""), &stdout, &stderr, pipeline.Run)
 		return result{code, stdout.String(), stderr.String()}
 	}
 
@@ -719,6 +731,108 @@ func TestEndToEnd(t *testing.T) {
 		}
 		assertEmptyDir(t, dir)
 	})
+
+	t.Run("reading list", func(t *testing.T) {
+		dir := t.TempDir()
+		blog, docs, missing, essay := srv.URL+"/posts/eink", srv.URL+"/docs/config", srv.URL+"/missing", srv.URL+"/essays/print-shop"
+		r := realRun("-URL", blog, "-URL", docs, "-URL", missing, "-URL", essay, "-URL", blog+"#comments",
+			"-TITLE", "Weekend Reading", "-SAVE", dir)
+		if r.code != exitOK {
+			t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		path := filepath.Join(dir, "weekend-reading.epub")
+		if strings.TrimSpace(r.stdout) != path {
+			t.Errorf("stdout = %q, want %q", r.stdout, path)
+		}
+		for _, want := range []string{
+			"note: " + blog + "#comments is listed more than once; including it once",
+			"[1/4] " + blog, "[4/4] " + essay,
+			"warning: skipped " + missing + ": couldn't fetch the page",
+			"made a book from 3 of 4 articles",
+		} {
+			if !strings.Contains(r.stderr, want) {
+				t.Errorf("stderr is missing %q:\n%s", want, r.stderr)
+			}
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		book := epubtest.Open(t, data)
+		book.AssertWellFormed(t)
+		for file, want := range map[string]string{
+			"chapter-01.xhtml": "<h1>Why E-Ink Is Easier on the Eyes</h1>",
+			"chapter-02.xhtml": "<h1>Configuring the Sync Daemon</h1>",
+			"chapter-03.xhtml": "<h1>A Walk Through the Print Shop</h1>",
+		} {
+			if chapter := book.File(t, file); !strings.Contains(chapter, want) {
+				t.Errorf("%s is missing %q", file, want)
+			}
+		}
+		if _, ok := book.Files["EPUB/xhtml/chapter-04.xhtml"]; ok {
+			t.Errorf("book has a fourth chapter; the missing page should be skipped")
+		}
+
+		opf := book.File(t, ".opf")
+		for _, want := range []string{
+			"<dc:title>Weekend Reading</dc:title>",
+			"<dc:source>" + blog + "</dc:source>",
+			"<dc:source>" + docs + "</dc:source>",
+			"<dc:source>" + essay + "</dc:source>",
+			"<dc:date>" + time.Now().UTC().Format("2006-01-02") + "</dc:date>",
+			`properties="cover-image"`,
+		} {
+			if !strings.Contains(opf, want) {
+				t.Errorf("OPF is missing %q:\n%s", want, opf)
+			}
+		}
+		if strings.Count(opf, "<dc:source>") != 3 {
+			t.Errorf("OPF should have 3 sources:\n%s", opf)
+		}
+		nav := book.File(t, "nav.xhtml")
+		for _, want := range []string{
+			`<a href="xhtml/chapter-01.xhtml">Why E-Ink Is Easier on the Eyes</a>`,
+			`<a href="xhtml/chapter-02.xhtml">Configuring the Sync Daemon</a>`,
+			`<a href="xhtml/chapter-02.xhtml#sec-1">`, // sections nest under their article
+			`<a href="xhtml/chapter-03.xhtml">A Walk Through the Print Shop</a>`,
+		} {
+			if !strings.Contains(nav, want) {
+				t.Errorf("nav is missing %q:\n%s", want, nav)
+			}
+		}
+		epubtest.EPUBCheck(t, path)
+
+		// The same list as a KEPUB.
+		r = realRun("-URL", blog, "-URL", essay, "-SAVE", dir, "-KEPUB")
+		if r.code != exitOK {
+			t.Fatalf("KEPUB: exit code = %d, stderr = %q", r.code, r.stderr)
+		}
+		kepubPath := strings.TrimSpace(r.stdout)
+		if !strings.HasSuffix(kepubPath, ".kepub.epub") || !strings.HasPrefix(filepath.Base(kepubPath), "reading-list-") {
+			t.Errorf("KEPUB saved as %q", kepubPath)
+		}
+		data, err = os.ReadFile(kepubPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chapter := epubtest.Open(t, data).File(t, "chapter-02.xhtml"); !strings.Contains(chapter, "koboSpan") {
+			t.Errorf("KEPUB chapter has no koboSpan elements")
+		}
+		epubtest.EPUBCheck(t, kepubPath)
+	})
+
+	t.Run("reading list where every URL fails", func(t *testing.T) {
+		dir := t.TempDir()
+		r := realRun("-URL", srv.URL+"/missing", "-URL", srv.URL+"/app", "-SAVE", dir)
+		if r.code != exitFetch {
+			t.Errorf("exit code = %d, want %d (the first failure's)", r.code, exitFetch)
+		}
+		if !strings.Contains(r.stderr, "error: none of the 2 URLs could be used; the first failed with: couldn't fetch the page") {
+			t.Errorf("stderr = %q", r.stderr)
+		}
+		assertEmptyDir(t, dir)
+	})
 }
 
 // TestLocalFilesNeverRead checks that a page can't pull files from the
@@ -774,7 +888,7 @@ func TestLocalFilesNeverRead(t *testing.T) {
 
 	out := filepath.Join(t.TempDir(), "book.epub")
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), []string{"-URL", srv.URL + "/posts/eink", "-SAVE", out}, &stdout, &stderr, pipeline.Run)
+	code := run(context.Background(), []string{"-URL", srv.URL + "/posts/eink", "-SAVE", out}, strings.NewReader(""), &stdout, &stderr, pipeline.Run)
 	if code != exitOK {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
@@ -795,4 +909,86 @@ func TestLocalFilesNeverRead(t *testing.T) {
 		t.Errorf("chapter still refers to a local file:\n%s", chapter)
 	}
 	t.Logf("server requests: %v\nwarnings:\n%s", requests, stderr.String())
+}
+
+func TestSeveralURLsMakeAReadingList(t *testing.T) {
+	dir := t.TempDir()
+	conv := &fakeConverter{title: "ignored"}
+	r := runCLI(t, conv, "-URL", "https://a.example/1", "-URL", "https://b.example/2", "-SAVE", dir+"/")
+	if r.code != exitOK {
+		t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+	}
+	title := pipeline.ListTitle(time.Now())
+	if conv.opts.Title != title {
+		t.Errorf("title = %q, want %q", conv.opts.Title, title)
+	}
+	if strings.Join(conv.urls, " ") != "https://a.example/1 https://b.example/2" {
+		t.Errorf("URLs = %q", conv.urls)
+	}
+	if conv.opts.BeforeImages != nil {
+		t.Errorf("BeforeImages is set, but the filename was known before fetching")
+	}
+	want := filepath.Join(dir, save.Slug(title)+".epub")
+	if !strings.HasPrefix(filepath.Base(want), "reading-list-") || strings.TrimSpace(r.stdout) != want {
+		t.Errorf("stdout = %q, want %q", r.stdout, want)
+	}
+}
+
+func TestTitleFlag(t *testing.T) {
+	dir := t.TempDir()
+	conv := &fakeConverter{title: "Article Title"}
+	r := runCLI(t, conv, "-URL", testURL, "-TITLE", "  My Book  ", "-SAVE", dir)
+	if r.code != exitOK {
+		t.Fatalf("exit code = %d, stderr = %q", r.code, r.stderr)
+	}
+	if conv.opts.Title != "My Book" {
+		t.Errorf("title = %q, want %q", conv.opts.Title, "My Book")
+	}
+	assertFile(t, filepath.Join(dir, "my-book.epub"), "epub:My Book")
+}
+
+func TestReadingListExistingFileStopsBeforeFetching(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "weekend.epub"), "old")
+	conv := &fakeConverter{}
+	r := runCLI(t, conv, "-URL", "https://a.example/1", "-URL", "https://b.example/2", "-TITLE", "Weekend", "-SAVE", dir)
+	if r.code != exitExists {
+		t.Errorf("exit code = %d, want %d; stderr = %q", r.code, exitExists, r.stderr)
+	}
+	if conv.calls != 0 {
+		t.Errorf("converter called %d times, want 0", conv.calls)
+	}
+}
+
+func TestTooManyURLs(t *testing.T) {
+	list := filepath.Join(t.TempDir(), "list.txt")
+	writeFile(t, list, numbered(63))
+	conv := &fakeConverter{}
+	r := runCLI(t, conv, "-URLS", list, "-SAVE", t.TempDir())
+	if r.code != exitUsage {
+		t.Errorf("exit code = %d, want %d", r.code, exitUsage)
+	}
+	want := "error: too many URLs: 63 given, but a book can hold at most 50. Split the list into several books.\n"
+	if r.stderr != want {
+		t.Errorf("stderr = %q, want just %q", r.stderr, want)
+	}
+	if conv.calls != 0 {
+		t.Errorf("converter called %d times, want 0", conv.calls)
+	}
+}
+
+func TestURLsFromStdin(t *testing.T) {
+	conv := &fakeConverter{}
+	var stdout, stderr bytes.Buffer
+	stdin := strings.NewReader("https://a.example/1\nhttps://b.example/2\nhttps://a.example/1\n")
+	code := run(context.Background(), []string{"-URLS", "-", "-SAVE", t.TempDir()}, stdin, &stdout, &stderr, conv.convert)
+	if code != exitOK {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if len(conv.urls) != 2 {
+		t.Errorf("URLs = %q, want 2", conv.urls)
+	}
+	if !strings.Contains(stderr.String(), "note: https://a.example/1 is listed more than once; including it once") {
+		t.Errorf("stderr = %q, want a note about the repeat", stderr.String())
+	}
 }

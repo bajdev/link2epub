@@ -11,11 +11,10 @@ import (
 
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
-
-	"github.com/bajdev/link2epub/internal/extract"
 )
 
-// chapterFile is the chapter's filename; go-epub stores it under xhtml/.
+// chapterFile is the chapter's filename in a book of one article; go-epub
+// stores it under xhtml/. Books of several articles number their chapters.
 const chapterFile = "chapter.xhtml"
 
 // Paths go-epub uses inside the book. finish fails if any is missing, so a
@@ -60,18 +59,25 @@ func anchorHeadings(body *html.Node) []heading {
 	return hs
 }
 
+// tocChapter is a chapter as listed in the table of contents.
+type tocChapter struct {
+	title, file string
+	headings    []heading
+}
+
 // finish rewrites the files go-epub gets wrong or can't express:
 //
-//   - the OPF gains dc:publisher (the site), dc:source (the URL) and
-//     dc:date (publication date);
-//   - the EPUB 3 nav document and the NCX list the article's sections.
+//   - the OPF gains dc:publisher (the site), dc:source (one per article)
+//     and dc:date;
+//   - the EPUB 3 nav document and the NCX list each article's sections.
 //     go-epub can only list whole files, and its NCX has no dtb:uid, which
 //     Kobo's RMSDK renderer reads for plain EPUBs.
-func finish(book []byte, id string, a *extract.Article, headings []heading) ([]byte, error) {
+func finish(book []byte, m bookMeta, chapters []tocChapter) ([]byte, error) {
+	contents := toc(chapters)
 	return rewriteZip(book, map[string]func([]byte) []byte{
-		opfPath: func(opf []byte) []byte { return addMetadata(opf, a) },
-		navPath: func([]byte) []byte { return navDocument(a, headings) },
-		ncxPath: func([]byte) []byte { return ncxDocument(id, a, headings) },
+		opfPath: func(opf []byte) []byte { return addMetadata(opf, m) },
+		navPath: func([]byte) []byte { return navDocument(m, contents) },
+		ncxPath: func([]byte) []byte { return ncxDocument(m, contents) },
 	})
 }
 
@@ -125,17 +131,19 @@ func rewriteZip(data []byte, edits map[string]func([]byte) []byte) ([]byte, erro
 
 // addMetadata inserts publisher, source and date elements into the OPF
 // metadata.
-func addMetadata(opf []byte, a *extract.Article) []byte {
+func addMetadata(opf []byte, m bookMeta) []byte {
 	var extra strings.Builder
 	element := func(name, value string) {
 		if value != "" {
 			fmt.Fprintf(&extra, "    <%s>%s</%s>\n", name, esc(value), name)
 		}
 	}
-	element("dc:publisher", a.SiteName)
-	element("dc:source", a.URL)
-	if !a.Published.IsZero() {
-		element("dc:date", a.Published.UTC().Format("2006-01-02"))
+	element("dc:publisher", m.publisher)
+	for _, src := range m.sources {
+		element("dc:source", src)
+	}
+	if !m.date.IsZero() {
+		element("dc:date", m.date.UTC().Format("2006-01-02"))
 	}
 	s := string(opf)
 	marker := `<meta property="dcterms:modified">`
@@ -157,28 +165,32 @@ type tocEntry struct {
 	children   []*tocEntry
 }
 
-// toc returns the table of contents: the article, with its <h2> sections
+// toc returns the table of contents: each article, with its <h2> sections
 // and their <h3> subsections beneath it. Paths are relative to the EPUB
 // folder, where the nav document and NCX live.
-func toc(a *extract.Article, headings []heading) *tocEntry {
-	href := "xhtml/" + chapterFile
-	root := &tocEntry{text: a.Title, href: href}
-	var section *tocEntry
-	for _, h := range headings {
-		e := &tocEntry{text: h.text, href: href + "#" + h.id}
-		if h.level == 3 && section != nil {
-			section.children = append(section.children, e)
-			continue
+func toc(chapters []tocChapter) []*tocEntry {
+	var roots []*tocEntry
+	for _, ch := range chapters {
+		href := "xhtml/" + ch.file
+		root := &tocEntry{text: ch.title, href: href}
+		var section *tocEntry
+		for _, h := range ch.headings {
+			e := &tocEntry{text: h.text, href: href + "#" + h.id}
+			if h.level == 3 && section != nil {
+				section.children = append(section.children, e)
+				continue
+			}
+			root.children = append(root.children, e)
+			if h.level == 2 {
+				section = e
+			}
 		}
-		root.children = append(root.children, e)
-		if h.level == 2 {
-			section = e
-		}
+		roots = append(roots, root)
 	}
-	return root
+	return roots
 }
 
-func navDocument(a *extract.Article, headings []heading) []byte {
+func navDocument(m bookMeta, contents []*tocEntry) []byte {
 	var b strings.Builder
 	var list func(es []*tocEntry, indent string)
 	list = func(es []*tocEntry, indent string) {
@@ -194,7 +206,7 @@ func navDocument(a *extract.Article, headings []heading) []byte {
 		}
 		b.WriteString(indent + "</ol>\n")
 	}
-	lang := esc(a.Language)
+	lang := esc(m.lang)
 	fmt.Fprintf(&b, `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="%s" xml:lang="%s">
@@ -204,20 +216,20 @@ func navDocument(a *extract.Article, headings []heading) []byte {
   <body>
     <nav epub:type="toc" id="toc">
       <h1>Contents</h1>
-`, lang, lang, esc(a.Title))
-	list([]*tocEntry{toc(a, headings)}, "      ")
+`, lang, lang, esc(m.title))
+	list(contents, "      ")
 	b.WriteString("    </nav>\n  </body>\n</html>\n")
 	return []byte(b.String())
 }
 
-func ncxDocument(id string, a *extract.Article, headings []heading) []byte {
-	root := toc(a, headings)
-	depth := 1
-	for _, e := range root.children {
-		depth = max(depth, 2)
-		if len(e.children) > 0 {
-			depth = 3
+func ncxDocument(m bookMeta, contents []*tocEntry) []byte {
+	var depth func(es []*tocEntry) int
+	depth = func(es []*tocEntry) int {
+		d := 0
+		for _, e := range es {
+			d = max(d, 1+depth(e.children))
 		}
+		return d
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, `<?xml version="1.0" encoding="UTF-8"?>
@@ -232,7 +244,7 @@ func ncxDocument(id string, a *extract.Article, headings []heading) []byte {
     <text>%s</text>
   </docTitle>
   <navMap>
-`, esc(a.Language), esc(id), depth, esc(a.Title))
+`, esc(m.lang), esc(m.id), depth(contents), esc(m.title))
 	order := 0
 	var point func(e *tocEntry, indent string)
 	point = func(e *tocEntry, indent string) {
@@ -245,7 +257,9 @@ func ncxDocument(id string, a *extract.Article, headings []heading) []byte {
 		}
 		fmt.Fprintf(&b, "%s</navPoint>\n", indent)
 	}
-	point(root, "    ")
+	for _, e := range contents {
+		point(e, "    ")
+	}
 	b.WriteString("  </navMap>\n</ncx>\n")
 	return []byte(b.String())
 }
