@@ -176,8 +176,6 @@ Use plain EPUB, without `-KEPUB`.
    - **reMarkable desktop or mobile app:** drag the file in.
    - **USB web interface:** connect by USB, turn on *Settings → Storage → USB web interface*, open <http://10.11.99.1> and upload the file.
 
-Direct upload from link2epub is planned for a later release (see [Roadmap](#roadmap)).
-
 ---
 
 ## Exit codes
@@ -308,9 +306,9 @@ See [`PLAN.md`](PLAN.md) for the full design.
 | M4 | Metadata, cover and table of contents | Done |
 | M5 | `-KEPUB` for Kobo | Done |
 | M6 | Polish and **v1 release** | Done |
-| M7 | Direct upload to reMarkable | Post-v1 |
+| M7 | Several URLs in one book: repeat `-URL`, or list them in a file with `-URLS`; optional `-TITLE` | Planned |
 
-Possible later features: JavaScript rendering, several URLs per book, title, author and cover overrides, and profiles for colour e-ink devices.
+Possible later features: JavaScript rendering, author and cover overrides, and profiles for colour e-ink devices.
 
 ---
 
