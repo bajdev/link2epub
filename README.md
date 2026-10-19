@@ -20,6 +20,7 @@ link2epub -URL https://example.com/some-article -SAVE ~/Books/
   - Diagrams and screenshots are kept crisp as 16-shade PNGs.
   - The stylesheet uses no colour and no gray text, and leaves fonts and margins to your reader's settings.
 - **A cover every time.** Each book gets a 3:4 grayscale cover whose title is readable at library-thumbnail size.
+- **Reading lists.** Several URLs make one book, with a chapter per article and a table of contents.
 - **Kobo-optimised output.** `-KEPUB` writes a `.kepub.epub` file, which Kobo opens with its faster renderer and shows reading stats for.
 - **Safe saving.**
   - An existing file is never overwritten unless you pass `-FORCE`.
@@ -78,20 +79,24 @@ build.cmd
 
 In PowerShell, run `.\build.cmd` instead. The script builds `link2epub.exe` in the repository folder, whichever folder you start it from. To update, run `git pull`, then `build.cmd` again.
 
-To try it on real articles, run `test-examples.cmd` (`.\test-examples.cmd` in PowerShell). It rebuilds `link2epub.exe`, converts a handful of sample articles into `test-examples\`, replacing books from earlier runs, and prints how many succeeded. Run `test-examples.cmd kepub` to make Kobo KEPUBs (`.kepub.epub`) instead. Edit the list of URLs in the script to test other pages.
+To try it on real articles, run `test-examples.cmd` (`.\test-examples.cmd` in PowerShell). It rebuilds `link2epub.exe`, converts the sample articles listed in `test-examples.txt` into `test-examples\` (one book each, then all of them as one reading-list book), replacing books from earlier runs, and prints how many succeeded. Run `test-examples.cmd kepub` to make Kobo KEPUBs (`.kepub.epub`) instead. Edit `test-examples.txt` to test other pages.
 
 ---
 
 ## Usage
 
 ```
-link2epub -URL <url> -SAVE <path> [-FORCE] [-KEPUB]
+link2epub -URL <url> -SAVE <path> [-TITLE <title>] [-FORCE] [-KEPUB]
+link2epub -URL <url> -URL <url> ... -SAVE <path> [options]
+link2epub -URLS <file> -SAVE <path> [options]
 link2epub -VERSION
 ```
 
 | Flag | Required | Description |
 |---|---|---|
-| `-URL` | yes | The web page to convert. Must start with `http://` or `https://`. |
+| `-URL` | yes, or `-URLS` | The web page to convert. Must start with `http://` or `https://`. Repeat it to put several articles in one book. |
+| `-URLS` | yes, or `-URL` | A text file listing web pages to put in one book, one per line (see [Reading lists](#reading-lists-several-urls-in-one-book)). `-URLS -` reads the list from standard input. |
+| `-TITLE` | no | The book's title. Defaults to the article's title or, for several articles, "Reading list, \<date\>". |
 | `-SAVE` | yes | Where to write the book: a file or a folder (see below). Missing folders are created. |
 | `-FORCE` | no | Overwrite the output file if it already exists. |
 | `-KEPUB` | no | Write a Kobo KEPUB (`.kepub.epub`) instead of a plain EPUB. |
@@ -103,7 +108,7 @@ Flag names are case-sensitive: `-URL` works, `-url` does not.
 
 | `-SAVE` value | Result |
 |---|---|
-| Ends in `/`, e.g. `~/Books/` | A folder (created if missing). The filename comes from the article title: `~/Books/<article-title>.epub` |
+| Ends in `/`, e.g. `~/Books/` | A folder (created if missing). The filename comes from the book's title: `~/Books/<book-title>.epub` |
 | An existing folder, e.g. `~/Books` | Same as above |
 | Ends in `.epub`, e.g. `~/Books/a.epub` | Written to exactly that file |
 | Anything else, e.g. `~/Books/a` | Treated as a file name, and `.epub` is appended: `~/Books/a.epub` |
@@ -130,12 +135,51 @@ Kobo only uses its faster renderer for files ending in `.kepub.epub`, so `-KEPUB
 
 | `-SAVE` value | Saved as |
 |---|---|
-| `~/Books/` (folder) | `~/Books/<article-title>.kepub.epub` |
+| `~/Books/` (folder) | `~/Books/<book-title>.kepub.epub` |
 | `~/Books/a.kepub.epub` | `~/Books/a.kepub.epub` |
 | `~/Books/a.epub` | `~/Books/a.kepub.epub` (with a note on stderr) |
 | `~/Books/a` | `~/Books/a.kepub.epub` |
 
 Passing a `.kepub.epub` path **without** `-KEPUB` is an error, because a plain EPUB with that name would display badly on a Kobo.
+
+### Reading lists: several URLs in one book
+
+Give several URLs and link2epub makes one book with a chapter per article, in the order given:
+
+```bash
+link2epub -URL https://example.com/one -URL https://example.org/two -SAVE ~/Books/
+```
+
+For longer lists, put the URLs in a text file, one per line, and pass it with `-URLS`. Blank lines and lines starting with `#` are ignored, so you can keep notes in the file:
+
+```
+# weekend-reading.txt
+https://example.com/one
+https://example.org/two?id=7&page=all
+```
+
+```bash
+link2epub -URLS weekend-reading.txt -TITLE "Weekend reading" -SAVE ~/Books/
+```
+
+A file is also the easy way around shell quoting. In Windows Command Prompt, a URL containing `&` must be quoted when it's given with `-URL`, but needs nothing special in a file. `-URL` and `-URLS` can be combined, and `-URLS -` reads the list from standard input.
+
+- **Title.** The book is called `-TITLE`, or "Reading list, \<date\>" without it. With a folder as `-SAVE`, the same title names the file, such as `reading-list-19-october-2026.epub`. Since the name is known up front, an existing file is caught before anything is downloaded.
+- **Contents.** Each chapter starts with its article's title, byline and source link. The table of contents lists the articles, with their sections beneath them. The cover shows the title and the article titles.
+- **Repeats.** A URL listed twice is included once, with a note.
+- **Limit.** A book holds at most 50 URLs. A longer list stops with `error: too many URLs: 63 given, but a book can hold at most 50. Split the list into several books.` before anything is downloaded.
+- **Failures.** A URL that can't be fetched, or has no readable article, is skipped with a warning, and the book is made from the rest. The run only fails, writing nothing, if every URL fails. Its exit code is that of the first failure.
+
+Progress shows on stderr:
+
+```
+[1/3] https://example.com/one
+[2/3] https://example.org/two
+warning: skipped https://example.org/two: couldn't fetch the page: https://example.org/two returned 404 Not Found; check the address
+[3/3] https://example.net/three
+made a book from 2 of 3 articles
+/home/me/Books/weekend-reading.epub
+```
 
 ### Output
 
@@ -184,7 +228,7 @@ Use plain EPUB, without `-KEPUB`.
 |---|---|
 | `0` | Success |
 | `1` | The page couldn't be fetched (network error, non-200 response, not an HTML page) |
-| `2` | Invalid arguments |
+| `2` | Invalid arguments, including a bad line in a `-URLS` file or more than 50 URLs |
 | `3` | No readable article content was found on the page |
 | `4` | The book couldn't be built or written (including folder creation) |
 | `5` | The output file already exists and `-FORCE` was not given |
@@ -212,6 +256,8 @@ done < urls.txt
 | `no readable article content found` | The page has no article text link2epub can find. Usually the page builds its content with JavaScript, or it's a paywall or cookie wall. |
 | `warning: image … skipped: …` | One image couldn't be downloaded or read. The book is still made, with the image's description in its place. |
 | `warning: cover image … skipped, using a plain cover` | The page's preview image couldn't be used, so the book gets a typographic cover instead. |
+| `too many URLs: … a book can hold at most 50` | A reading list has more than 50 different URLs. Split it into several books. |
+| `warning: skipped …` | One URL in a reading list couldn't be used. The reason follows; the book is made from the others. |
 | `… is a local or private address …` | The page tried to send link2epub to your own computer or network, through a redirect or an image. That's refused for pages on the internet (see [Privacy and security](#privacy-and-security)). To convert a page on your own network, give its local address as `-URL`. |
 
 To report a problem with a particular page, include the output of `link2epub -VERSION`, the full command, everything it printed, and a saved copy of the page:
@@ -263,7 +309,7 @@ On Windows, `build.cmd` builds `link2epub.exe` and `test-examples.cmd` converts 
 ### Project layout
 
 ```
-cmd/link2epub/      CLI entry point (flags, exit codes, -VERSION)
+cmd/link2epub/      CLI entry point (flags, URL lists, exit codes, -VERSION)
 internal/pipeline/  Runs the stages below in order
 internal/fetch/     HTTP download, local-network guard, character-set decoding, friendly network errors
 internal/extract/   Article and metadata extraction (go-trafilatura, page metadata)
@@ -306,7 +352,7 @@ See [`PLAN.md`](PLAN.md) for the full design.
 | M4 | Metadata, cover and table of contents | Done |
 | M5 | `-KEPUB` for Kobo | Done |
 | M6 | Polish and **v1 release** | Done |
-| M7 | Several URLs in one book: repeat `-URL`, or list them in a file with `-URLS`; optional `-TITLE` | Planned |
+| M7 | Several URLs in one book: repeat `-URL`, or list them in a file with `-URLS`; optional `-TITLE` | Done |
 
 Possible later features: JavaScript rendering, author and cover overrides, and profiles for colour e-ink devices.
 

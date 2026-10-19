@@ -3,10 +3,12 @@ package cover
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"slices"
 	"strings"
 	"sync"
 
@@ -26,6 +28,9 @@ type Details struct {
 	Title    string
 	SiteName string // may be empty
 	Date     string // already formatted; may be empty
+	// Contents lists the article titles of a book of several articles.
+	// When set, the cover lists them and SiteName and Date are ignored.
+	Contents []string
 }
 
 // Render draws a grayscale JPEG cover at the profile's cover size. With a
@@ -41,7 +46,9 @@ func Render(d Details, photo image.Image, p device.Profile) ([]byte, error) {
 	textWidth := w - 2*margin
 	sub := subtitle(d)
 
-	if photo != nil {
+	if len(d.Contents) > 0 {
+		drawContents(img, d, margin)
+	} else if photo != nil {
 		photoHeight := h * 3 / 5
 		drawPhoto(img, image.Rect(0, 0, w, photoHeight), photo)
 		top := photoHeight + margin*2/3
@@ -77,6 +84,40 @@ func Render(d Details, photo image.Image, p device.Profile) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// drawContents draws the cover of a book of several articles: a black band
+// with the number of articles, the title, and as many article titles as
+// fit, ending with "and N more" when some don't.
+func drawContents(img *image.Gray, d Details, margin int) {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	textWidth := w - 2*margin
+	band := h / 9
+	draw.Draw(img, image.Rect(0, 0, w, band), image.Black, image.Point{}, draw.Src)
+	drawLines(img, regular(), []string{fmt.Sprintf("%d articles", len(d.Contents))}, 54, margin, band/2+18, color.White, false)
+
+	top := band + margin*3/2
+	face, lines := fitTitle(d.Title, textWidth, h*2/7, 120, 64)
+	end := drawWrapped(img, face, lines, margin, top)
+	rule := end + margin*3/4
+	draw.Draw(img, image.Rect(margin, rule, margin+w/4, rule+8), image.Black, image.Point{}, draw.Src)
+
+	const size, lineHeight = 44, 66
+	first := rule + margin + size // baseline of the first entry
+	fits := max(1, (h-margin-first)/lineHeight+1)
+	for i, title := range fitContents(d.Contents, fits) {
+		line := truncate(regular(), size, strings.Join(strings.Fields(title), " "), textWidth)
+		drawLines(img, regular(), []string{line}, size, margin, first+i*lineHeight, color.Black, false)
+	}
+}
+
+// fitContents returns at most n lines listing titles. When they don't all
+// fit, the last line says how many were left out.
+func fitContents(titles []string, n int) []string {
+	if len(titles) <= n {
+		return titles
+	}
+	return append(slices.Clone(titles[:n-1]), fmt.Sprintf("and %d more", len(titles)-(n-1)))
 }
 
 // subtitle is "Site · Date", skipping whichever is missing.

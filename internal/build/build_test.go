@@ -300,3 +300,132 @@ func TestBuildWithoutHeadingsOrDate(t *testing.T) {
 		t.Errorf("NCX depth should be 1")
 	}
 }
+
+// testChapter returns a cleaned chapter for BuildBook. With image set, it
+// ends with the processed image "abc123.png", as the assets package leaves
+// it.
+func testChapter(t *testing.T, url, title, author, site, lang, body string, image bool) Chapter {
+	t.Helper()
+	a := testArticle(t, body)
+	a.URL, a.Title, a.Author, a.SiteName, a.Language = url, title, author, site, lang
+	content, err := clean.Content(a.Content, mustURL(t, a.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if image {
+		frag, err := html.ParseFragment(strings.NewReader(`<p><img src="abc123.png" alt="x"/></p>`), content)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content.AppendChild(frag[0])
+	}
+	return Chapter{Article: a, Body: content}
+}
+
+func TestBuildBookOfSeveralArticles(t *testing.T) {
+	var png bytes.Buffer
+	if err := imgpng.Encode(&png, image.NewGray(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatal(err)
+	}
+	shared := assets.Image{Filename: "abc123.png", MediaType: "image/png", Data: png.Bytes()}
+	b := Book{
+		Title: "Weekend Reading",
+		Chapters: []Chapter{
+			testChapter(t, "https://a.example/1", "First", "Ada Lovelace", "Site A", "en", `<p>One.</p><h2>Part</h2>`, true),
+			testChapter(t, "https://b.example/2", "Second", "Grace Hopper", "Site B", "de", `<p>Zwei.</p>`, true),
+			testChapter(t, "https://c.example/3", "Third", "Ada Lovelace", "Site A", "en", `<p>Three.</p>`, false),
+		},
+		Images: []assets.Image{shared, shared}, // the same image from two articles
+		Made:   time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC),
+	}
+	data, err := BuildBook(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := epubtest.Open(t, data)
+	book.AssertWellFormed(t)
+
+	opf := book.File(t, ".opf")
+	for _, want := range []string{
+		"<dc:title>Weekend Reading</dc:title>",
+		"Ada Lovelace and Grace Hopper",
+		"<dc:language>en</dc:language>", // the most common
+		"<dc:source>https://a.example/1</dc:source>",
+		"<dc:source>https://c.example/3</dc:source>",
+		"<dc:date>2026-10-19</dc:date>",
+	} {
+		if !strings.Contains(opf, want) {
+			t.Errorf("OPF is missing %q:\n%s", want, opf)
+		}
+	}
+	if strings.Contains(opf, "dc:publisher") {
+		t.Errorf("OPF names a publisher, but the articles come from different sites:\n%s", opf)
+	}
+	if n := strings.Count(opf, `media-type="image/png"`); n != 1 {
+		t.Errorf("shared image stored %d times, want once", n)
+	}
+	if second := book.File(t, "chapter-02.xhtml"); !strings.Contains(second, `<div lang="de" xml:lang="de">`) || !strings.Contains(second, `src="../images/abc123.png"`) {
+		t.Errorf("chapter 2 lost its language or image:\n%s", second)
+	}
+
+	nav := book.File(t, "nav.xhtml")
+	navWant := `<li><a href="xhtml/chapter-01.xhtml">First</a>
+        <ol>
+          <li><a href="xhtml/chapter-01.xhtml#sec-1">Part</a></li>
+        </ol>
+        </li>
+        <li><a href="xhtml/chapter-02.xhtml">Second</a></li>
+        <li><a href="xhtml/chapter-03.xhtml">Third</a></li>`
+	squash := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	if !strings.Contains(squash(nav), squash(navWant)) {
+		t.Errorf("nav document:\n%s\nwant it to contain:\n%s", nav, navWant)
+	}
+	ncx := book.File(t, "toc.ncx")
+	for _, want := range []string{`<meta name="dtb:depth" content="2"/>`, `<text>Weekend Reading</text>`, `<navPoint id="navpoint-4" playOrder="4">`} {
+		if !strings.Contains(ncx, want) {
+			t.Errorf("NCX is missing %q:\n%s", want, ncx)
+		}
+	}
+
+	path := filepath.Join(t.TempDir(), "book.epub")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	epubtest.EPUBCheck(t, path)
+}
+
+func TestBookMetadata(t *testing.T) {
+	chapter := func(url, author, site, lang string) Chapter {
+		return Chapter{Article: &extract.Article{URL: url, Author: author, SiteName: site, Language: lang}}
+	}
+	many := Book{Chapters: []Chapter{
+		chapter("https://x/1", "A", "Same", "fr"),
+		chapter("https://x/2", "B", "Same", "en"),
+		chapter("https://x/3", "C", "Same", "fr"),
+		chapter("https://x/4", "D", "Same", "en"),
+		chapter("https://x/5", "", "Same", "en"),
+	}}
+	m := metadata(many)
+	if m.author != "Various authors" {
+		t.Errorf("author = %q, want Various authors", m.author)
+	}
+	if m.publisher != "Same" {
+		t.Errorf("publisher = %q, want the shared site", m.publisher)
+	}
+	if m.lang != "en" {
+		t.Errorf("lang = %q, want en", m.lang)
+	}
+	if again := metadata(many); again.id != m.id {
+		t.Errorf("identifier changed between builds of the same list")
+	}
+	reordered := Book{Chapters: []Chapter{many.Chapters[1], many.Chapters[0]}}
+	if metadata(reordered).id == metadata(Book{Chapters: many.Chapters[:2]}).id {
+		t.Errorf("different lists gave the same identifier")
+	}
+	if got := joinNames([]string{"A", "B", "C"}); got != "A, B and C" {
+		t.Errorf("joinNames = %q", got)
+	}
+	if _, err := BuildBook(Book{Title: "Empty"}); err == nil {
+		t.Errorf("BuildBook accepted a book with no articles")
+	}
+}

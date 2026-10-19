@@ -1,0 +1,8 @@
+# Articles converted by test-examples.cmd: one book each, then all of them
+# as one reading-list book. One URL per line; lines starting with # are
+# ignored.
+https://pluralistic.net/2026/09/12/god-in-the-box/
+https://arstechnica.com/gadgets/2026/10/kde-turns-30-with-plasma-6-8-remote-upgrades-and-an-x11-farewell/
+https://www.bbc.com/news/articles/c5ygyww0zk3o
+https://en.wikipedia.org/wiki/BattleTech
+https://www.wired.com/story/breadfruit-caribbean-pacific-climate-change-super-food/

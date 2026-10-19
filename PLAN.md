@@ -458,7 +458,7 @@ Validation:
 
 Each milestone is a separate PR. After M1 the core job already works from end to end. M0–M6 make up v1.
 
-**Status:** M0–M6 are done. M6 added:
+**Status:** M0–M7 are done. M7 added reading lists as designed below: a repeatable `-URL`, `-URLS` list files (including standard input), `-TITLE`, the 50-URL limit, skipping failed URLs, one chapter per article with a nested table of contents, and a reading-list cover. M6 added:
 - friendlier messages for common network failures (unknown host, refused connection, bad certificate, timeout) and hints on 403/404/429 responses;
 - exit code 130 for Ctrl-C;
 - a `-VERSION` flag, stamped by release builds and `build.cmd`;
