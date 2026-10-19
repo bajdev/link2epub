@@ -474,7 +474,11 @@ Each milestone is a separate PR. After M1 the core job already works from end to
 - Articles appear in the order given on the command line. A `-URLS` file's lines go where the flag appears.
 - Every URL is checked before anything is fetched, with the same rules as today. A bad entry is a usage error (exit `2`) naming it, with its line number for a list file. An empty list is an error too.
 - A URL given twice is included once. URLs that differ only in their `#fragment` count as the same.
-- At most 100 URLs, to catch mistakes such as passing the wrong file.
+- At most 50 URLs per book. That's plenty for a reading list, and it catches mistakes such as passing the wrong file. Duplicates are removed before counting. Going over the limit is a usage error (exit `2`), reported before anything is fetched, with a message that says what to do:
+
+  ```
+  error: too many URLs: 63 given, but a book can hold at most 50. Split the list into several books.
+  ```
 
 **Title.** `-TITLE` is optional.
 - With one URL, the book uses the article's title as today; `-TITLE` overrides it.
@@ -502,7 +506,8 @@ Each milestone is a separate PR. After M1 the core job already works from end to
 - `main` parses the new flags; the single-URL path stays as it is.
 
 **Tests.**
-- Flag and list-file parsing: comments, blank lines, stdin, duplicates, the limit, line numbers in errors.
+- Flag and list-file parsing: comments, blank lines, stdin, duplicates, line numbers in errors.
+- The 50-URL limit: exactly 50 is accepted; 51 gives the error above with exit `2` and nothing fetched; 51 entries that are 50 after removing a duplicate are accepted.
 - End-to-end with three local pages, one of which returns 404.
 - Nested table of contents and per-chapter language.
 - epubcheck on multi-article EPUB and KEPUB output.
@@ -536,4 +541,4 @@ Each milestone is a separate PR. After M1 the core job already works from end to
 | Target devices | reMarkable 2 and Kobo Clara HD (grayscale e-ink) |
 | Kobo-optimised output | `-KEPUB` flag in v1 (M5) |
 | Getting books onto the reMarkable | You upload the saved file by hand. Direct upload was dropped, so link2epub stays focused on making the file |
-| Several URLs in one book (M7) | Repeatable `-URL` plus a `-URLS` list file; optional `-TITLE`; failed URLs are skipped with a warning |
+| Several URLs in one book (M7) | Repeatable `-URL` plus a `-URLS` list file; optional `-TITLE`; at most 50 URLs, with a clear error above that; failed URLs are skipped with a warning |
