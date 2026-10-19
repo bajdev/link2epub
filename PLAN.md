@@ -21,7 +21,7 @@ The primary targets are two grayscale e-ink readers. Every output decision (imag
 | Colour | Grayscale only | Grayscale only (16 levels, E Ink Carta) |
 | Aspect ratio | 3:4 | ≈3:4 |
 | EPUB rendering | Reflows EPUB with its own renderer; limited CSS support | Plain `.epub` uses the older Adobe RMSDK engine; `.kepub.epub` uses Kobo's faster WebKit engine |
-| Getting the book onto it | You upload the saved file yourself (desktop or mobile app, or the USB web interface at `http://10.11.99.1`). Direct upload is a post-v1 milestone (M7) | USB mass storage (FAT32): `-SAVE` straight onto the device, or copy the file |
+| Getting the book onto it | You upload the saved file yourself (desktop or mobile app, or the USB web interface at `http://10.11.99.1`). link2epub only makes the file | USB mass storage (FAT32): `-SAVE` straight onto the device, or copy the file |
 
 Both screens share a 3:4 aspect ratio, so one image size and one cover size fit both. The default plain EPUB must work on both devices. `-KEPUB` produces a Kobo-optimised `.kepub.epub` instead (§5.7). Use it for the Clara HD, and plain EPUB for the reMarkable.
 
@@ -35,10 +35,10 @@ Both screens share a 3:4 aspect ratio, so one image size and one cover size fit 
 - Ships as a single static binary with no runtime dependencies.
 
 ### Out of scope for v1 (see §9)
-- Several URLs in one book, crawling a site, following "next page" links.
+- Several URLs in one book (added in M7, §8). Crawling a site and following "next page" links stay out of scope.
 - Pages that only show content after JavaScript runs.
 - Pages behind a login or paywall.
-- Uploading directly to a reMarkable. You copy the saved file over yourself; direct upload is milestone M7.
+- Uploading to a device. link2epub stays focused on making the file; you copy it over yourself.
 - A web UI or hosted service.
 
 ---
@@ -454,7 +454,7 @@ Validation:
 | M4 | Metadata and cover | Metadata fallbacks, 1404×1872 grayscale cover (lead image or typographic), heading-based table of contents |
 | M5 | KEPUB | `-KEPUB` flag via kepubify, extension handling, tested on the Clara HD |
 | M6 | Polish and v1 release | Error messages and exit codes, README with per-device instructions (reMarkable: plain EPUB plus manual upload; Kobo: `-KEPUB`), goreleaser binaries |
-| M7 | *(post-v1)* Direct reMarkable upload | Upload to a USB-connected reMarkable through its web interface, then optionally to reMarkable cloud (§9) |
+| M7 | *(post-v1)* Several URLs in one book | Repeatable `-URL`, a `-URLS` list file and an optional `-TITLE`; one chapter per article (design below) |
 
 Each milestone is a separate PR. After M1 the core job already works from end to end. M0–M6 make up v1.
 
@@ -466,21 +466,58 @@ Each milestone is a separate PR. After M1 the core job already works from end to
 - CI actions moved off the retiring Node 20 runtime;
 - the README rewritten for v1, with downloads, troubleshooting and releasing sections.
 
+### M7 design: several URLs in one book
+
+**Input.** Both ways can be used, and combined, in one command:
+- `-URL` may be repeated: `-URL https://a.example/one -URL https://b.example/two`. A custom `flag.Value` collects them.
+- `-URLS <file>` reads a text file with one URL per line. Surrounding spaces are trimmed, and blank lines and lines starting with `#` are ignored. `-URLS -` reads the list from standard input. A file avoids shell quoting problems (an unquoted `&` breaks a Windows `cmd` command) and keeps a reading list reusable.
+- Articles appear in the order given on the command line. A `-URLS` file's lines go where the flag appears.
+- Every URL is checked before anything is fetched, with the same rules as today. A bad entry is a usage error (exit `2`) naming it, with its line number for a list file. An empty list is an error too.
+- A URL given twice is included once. URLs that differ only in their `#fragment` count as the same.
+- At most 100 URLs, to catch mistakes such as passing the wrong file.
+
+**Title.** `-TITLE` is optional.
+- With one URL, the book uses the article's title as today; `-TITLE` overrides it.
+- With several URLs, the book is titled `-TITLE`, or "Reading list, 19 October 2026" (today's date) when it's missing.
+- For folder targets the filename is the slug of that title. With several URLs the title is known before fetching, so an existing file is caught before anything is downloaded.
+- One URL without `-TITLE` behaves exactly as v1.
+
+**Fetching and failures.**
+- Articles are fetched one at a time, in order, so sites aren't flooded and progress reads naturally. Each article's images download concurrently as today. Progress goes to stderr: `[2/5] https://…`.
+- A URL that can't be fetched, or has no readable content, is skipped with a warning, and the book is made from the rest. A summary follows: `made a book from 4 of 5 articles`. If every URL fails, the exit code is that of the first failure (`1` or `3`) and no file is written.
+- The local-network guard is decided per URL: an article may use local addresses only if its own URL is local.
+
+**Book structure.**
+- One chapter file per article (`chapter-01.xhtml`, …), each starting with its own header: title, byline and source link, as in v1. Each chapter keeps its article's language in `xml:lang`.
+- The table of contents lists the articles, with each article's section headings nested under it.
+- Images are stored once across the whole book, since files are already named by content hash.
+- The cover is typographic: the book title, "5 articles", and the first few article titles.
+- Metadata: `dc:title` is the book title. `dc:creator` lists the distinct authors, or "Various authors" when there are more than three. There's one `dc:source` per article. `dc:language` is the most common article language, and `dc:date` is the day the book was made. The identifier is derived from the list of URLs, so rebuilding the same list gives the same book identity.
+- `-KEPUB` works the same as for one article.
+
+**Code changes.**
+- `pipeline` splits into an article stage (fetch, extract, clean, images) and a book stage that takes the list of articles.
+- `build` generalises from one chapter to several, and the generated nav and NCX gain a level.
+- `cover` gets a reading-list layout.
+- `main` parses the new flags; the single-URL path stays as it is.
+
+**Tests.**
+- Flag and list-file parsing: comments, blank lines, stdin, duplicates, the limit, line numbers in errors.
+- End-to-end with three local pages, one of which returns 404.
+- Nested table of contents and per-chapter language.
+- epubcheck on multi-article EPUB and KEPUB output.
+
 ---
 
 ## 9. Future extensions
 
 - **JavaScript rendering**: a `-RENDER` flag using `chromedp` to drive a local Chrome/Chromium for SPA pages.
-- **Several URLs in one book**: allow `-URL` to be repeated (a custom `flag.Value`), with one chapter per URL, or read URLs from a file.
 - **More flags**:
-  - `-TITLE` and `-AUTHOR` overrides;
+  - an `-AUTHOR` override (`-TITLE` arrives in M7);
   - `-COVER` for a custom cover image;
   - `-NOIMAGES`;
   - `-TIMEOUT`.
 - **Follow pagination**: follow `rel="next"` links for multi-page articles.
-- **Send to reMarkable (M7)**: in v1 you upload the saved file yourself. M7 adds a flag (e.g. `-REMARKABLE`) that, after saving locally, also uploads the book:
-  - first to a USB-connected device through its web interface (`POST http://10.11.99.1/upload`, multipart). This needs no account, but the "USB web interface" setting must be turned on;
-  - later, possibly to reMarkable cloud using an `rmapi`-style client. That needs a one-time device-pairing token and is more fragile, because the cloud API isn't officially documented.
 - **More device profiles**: a `-DEVICE` flag for colour e-ink (e.g. Kobo Libra Colour) or tablets, so colour images are kept. The `device.Profile` type already allows for this.
 - **Better contrast for e-ink**: optionally raise image contrast and gamma, since images often look washed out on e-ink.
 - **RSS/Atom digest**: turn the last N feed items into one EPUB.
@@ -498,4 +535,5 @@ Each milestone is a separate PR. After M1 the core job already works from end to
 | Missing output folders | Created automatically |
 | Target devices | reMarkable 2 and Kobo Clara HD (grayscale e-ink) |
 | Kobo-optimised output | `-KEPUB` flag in v1 (M5) |
-| Getting books onto the reMarkable | v1 saves locally and you upload by hand. Direct upload is post-v1 milestone M7 |
+| Getting books onto the reMarkable | You upload the saved file by hand. Direct upload was dropped, so link2epub stays focused on making the file |
+| Several URLs in one book (M7) | Repeatable `-URL` plus a `-URLS` list file; optional `-TITLE`; failed URLs are skipped with a warning |
