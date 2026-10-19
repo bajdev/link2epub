@@ -52,8 +52,10 @@ type Options struct {
 }
 
 // Run converts the page at u into a book using the default settings.
+// Images and redirects may lead to local and private addresses only when
+// u itself is local.
 func Run(ctx context.Context, u *url.URL, opts Options) (*Book, error) {
-	return New().Run(ctx, u, opts)
+	return New(fetch.IsLocal(ctx, u.Hostname())).Run(ctx, u, opts)
 }
 
 // Pipeline holds the settings for conversions.
@@ -63,9 +65,10 @@ type Pipeline struct {
 }
 
 // New returns a Pipeline with the default settings. Pages and images share
-// one HTTP client.
-func New() Pipeline {
-	f := fetch.New()
+// one HTTP client, which connects to local and private addresses only if
+// allowLocal is set.
+func New(allowLocal bool) Pipeline {
+	f := fetch.New(allowLocal)
 	return Pipeline{Fetcher: f, Images: assets.New(f.Client, f.UserAgent)}
 }
 

@@ -73,6 +73,10 @@ func TestUsageErrors(t *testing.T) {
 		{"extra argument", []string{"-URL", testURL, "-SAVE", out, "extra"}, `unexpected argument "extra"`},
 		{"ftp URL", []string{"-URL", "ftp://example.com/a", "-SAVE", out}, "must start with http:// or https://"},
 		{"no scheme", []string{"-URL", "example.com/a", "-SAVE", out}, "must start with http:// or https://"},
+		{"file URL", []string{"-URL", "file:///etc/passwd", "-SAVE", out}, "must start with http:// or https://"},
+		{"local path", []string{"-URL", "/etc/passwd", "-SAVE", out}, "must start with http:// or https://"},
+		{"Windows path", []string{"-URL", `C:\Users\me\notes.html`, "-SAVE", out}, "-URL"},
+		{"UNC path", []string{"-URL", `\\server\share\page.html`, "-SAVE", out}, "must start with http:// or https://"},
 		{"no host", []string{"-URL", "https://", "-SAVE", out}, "missing host name"},
 		{"invalid URL", []string{"-URL", "https://exa mple.com/%zz", "-SAVE", out}, "not a valid URL"},
 		{"kepub name without -KEPUB", []string{"-URL", testURL, "-SAVE", filepath.Join(dir, "a.kepub.epub")}, "needs -KEPUB"},
@@ -715,4 +719,80 @@ func TestEndToEnd(t *testing.T) {
 		}
 		assertEmptyDir(t, dir)
 	})
+}
+
+// TestLocalFilesNeverRead checks that a page can't pull files from the
+// reader's computer into the book, whichever way it refers to them.
+func TestLocalFilesNeverRead(t *testing.T) {
+	const marker = "TOP-SECRET-MARKER-7f3a"
+	secrets := t.TempDir()
+	secretText := filepath.Join(secrets, "secret.txt")
+	if err := os.WriteFile(secretText, []byte(marker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	png, err := os.ReadFile("../../testdata/images/diagram.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secretPNG := filepath.Join(secrets, "secret.png")
+	if err := os.WriteFile(secretPNG, png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fileURL := func(path string) string {
+		p := filepath.ToSlash(path)
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p // a Windows path such as C:/Users/...
+		}
+		return "file://" + p
+	}
+
+	blog, err := os.ReadFile("../../testdata/pages/blog.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := strings.Replace(string(blog), "</head>",
+		`<meta property="og:image" content="`+fileURL(secretPNG)+`"></head>`, 1)
+	page = strings.Replace(page, "</p>", "</p>"+
+		`<p><img src="`+fileURL(secretPNG)+`" alt="one">`+
+		`<img src="file://localhost`+filepath.ToSlash(secretPNG)+`" alt="two">`+
+		`<img src="`+filepath.ToSlash(secretPNG)+`" alt="three">`+
+		`<img src="`+secretPNG+`" alt="four">`+
+		`<img src="`+fileURL(secretText)+`" alt="five">`+
+		`<picture><source srcset="`+fileURL(secretPNG)+` 2x"><img src="`+fileURL(secretPNG)+`" alt="six"></picture>`+
+		`<a href="`+fileURL(secretText)+`">notes</a></p>`, 1)
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.Path)
+		if r.URL.Path != "/posts/eink" {
+			http.NotFound(w, r) // relative paths resolve to this server
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(page))
+	}))
+	defer srv.Close()
+
+	out := filepath.Join(t.TempDir(), "book.epub")
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"-URL", srv.URL + "/posts/eink", "-SAVE", out}, &stdout, &stderr, pipeline.Run)
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := epubtest.Open(t, data)
+	for name, content := range book.Files {
+		if strings.Contains(content, marker) {
+			t.Errorf("%s contains the secret file's content", name)
+		}
+		if strings.HasSuffix(name, ".png") || (strings.HasSuffix(name, ".jpg") && !strings.HasSuffix(name, "cover.jpg")) {
+			t.Errorf("book contains image %s; the only image should be the typographic cover", name)
+		}
+	}
+	if chapter := book.File(t, "chapter.xhtml"); strings.Contains(chapter, "file:") {
+		t.Errorf("chapter still refers to a local file:\n%s", chapter)
+	}
+	t.Logf("server requests: %v\nwarnings:\n%s", requests, stderr.String())
 }

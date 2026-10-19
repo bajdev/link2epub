@@ -357,6 +357,12 @@ func TestUnusableImages(t *testing.T) {
 		{"damaged", `<img src="{S}/broken.jpg" alt="x">`, `<span class="missing-image">[Image: x]</span>`, "unsupported or damaged"},
 		{"decompression bomb", `<img src="{S}/bomb.png" alt="x">`, `<span class="missing-image">[Image: x]</span>`, "too large"},
 		{"unsupported scheme", `<img src="ftp://example.com/a.png" alt="x">`, `<span class="missing-image">[Image: x]</span>`, "unsupported URL scheme"},
+		// Local files are never read, whatever form the path takes.
+		{"file URL", `<img src="file:///etc/hosts" alt="x">`, `<span class="missing-image">[Image: x]</span>`, "unsupported URL scheme"},
+		{"file URL with host", `<img src="file://localhost/etc/hosts" alt="x">`, `<span class="missing-image">[Image: x]</span>`, "unsupported URL scheme"},
+		{"absolute path", `<img src="/etc/hosts" alt="x">`, `<span class="missing-image">[Image: x]</span>`, "unsupported URL scheme"},
+		{"Windows path", `<img src="C:\Windows\win.ini" alt="x">`, `<span class="missing-image">[Image: x]</span>`, "skipped"},
+		{"UNC path", `<img src="\\server\share\a.png" alt="x">`, `<span class="missing-image">[Image: x]</span>`, "skipped"},
 		// Tracking pixels are dropped without a warning.
 		{"tracking pixel", `<p>a<img src="{S}/pixel.png">b</p>`, `<p>ab</p>`, ""},
 	}
@@ -401,5 +407,15 @@ func TestCancelled(t *testing.T) {
 	cancel()
 	if _, err := New(s.Client(), "test-agent").Process(ctx, doc, page); err == nil {
 		t.Error("Process succeeded after cancellation, want an error")
+	}
+}
+
+func TestDecodeRefusesLocalFiles(t *testing.T) {
+	page, _ := url.Parse("https://example.com/article")
+	p := New(http.DefaultClient, "test-agent")
+	for _, src := range []string{"file:///etc/hosts", "/etc/hosts", `C:\Windows\win.ini`} {
+		if _, err := p.Decode(context.Background(), src, page); err == nil {
+			t.Errorf("Decode(%q) succeeded", src)
+		}
 	}
 }

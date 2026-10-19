@@ -5,7 +5,7 @@ rem Run it from Command Prompt or PowerShell:
 rem     build.cmd          (Command Prompt)
 rem     .\build.cmd        (PowerShell)
 rem
-rem Needs Go 1.24 or newer: https://go.dev/dl/
+rem Needs Go 1.26 or newer: https://go.dev/dl/
 setlocal
 
 rem Work from the folder this script is in, wherever it was started from.
@@ -13,7 +13,7 @@ cd /d "%~dp0"
 
 where go >nul 2>nul
 if errorlevel 1 (
-    echo error: Go was not found. Install Go 1.24 or newer from https://go.dev/dl/
+    echo error: Go was not found. Install Go 1.26 or newer from https://go.dev/dl/
     echo and open a new terminal so the installer's PATH change takes effect.
     exit /b 1
 )

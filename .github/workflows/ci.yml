@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly, so newly published vulnerabilities in Go or a dependency
+    # show up even when nothing has changed here.
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
@@ -13,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The oldest Go that go.mod allows, so it keeps building there.
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -27,7 +32,7 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
 
   release-build:
     # Builds every release binary without publishing, so a broken release
@@ -39,11 +44,25 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --snapshot --clean
+
+  vulncheck:
+    # Reports known vulnerabilities in the Go standard library and the
+    # dependencies that the code actually calls.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   test:
     strategy:
@@ -55,7 +74,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
+          check-latest: true
       - uses: actions/setup-java@v6
         with:
           distribution: temurin

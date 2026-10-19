@@ -24,12 +24,15 @@ func Explain(err error) error {
 		}
 	}
 
+	var blocked *BlockedError
 	var dnsErr *net.DNSError
 	var certErr *tls.CertificateVerificationError
 	var unknownAuthority x509.UnknownAuthorityError
 	var hostnameErr x509.HostnameError
 	var invalidCert x509.CertificateInvalidError
 	switch {
+	case errors.As(err, &blocked):
+		return &explained{fmt.Sprintf("%s is a local or private address (%s); link2epub connects to those only when -URL is a local address too", orServer(host), blocked.Addr), err}
 	case errors.As(err, &dnsErr):
 		return &explained{fmt.Sprintf("can't find the server %s; check the address and your internet connection", dnsErr.Name), err}
 	case isRefused(err):
